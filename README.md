@@ -6,7 +6,7 @@ O modelo recebe os trechos recuperados a cada pergunta. A ingestão **não retre
 
 ## Início rápido
 
-Pré-requisitos: Windows com WSL2, Ubuntu 24.04+, Git e Docker com Compose v2. Use **uma** instalação Docker: Engine dentro do Ubuntu ou integração WSL do Docker Desktop/Rancher Desktop. O comando `docker info` precisa funcionar no Ubuntu.
+Pré-requisitos: Windows com WSL2, Ubuntu 24.04+, Git para clonar o projeto e acesso a `sudo` para instalar pacotes. O instalador abaixo prepara Docker, Compose e Buildx. Use **uma** instalação Docker: Engine dentro do Ubuntu ou integração WSL do Docker Desktop/Rancher Desktop. Ao terminar a preparação, o comando `docker info` precisa funcionar no Ubuntu.
 
 No terminal Ubuntu:
 
@@ -15,6 +15,7 @@ mkdir -p ~/projetos
 cd ~/projetos
 git clone https://github.com/jeanbezerra/mini-rag-wsl.git
 cd mini-rag-wsl
+bash scripts/install-deps.sh
 bash scripts/bootstrap.sh
 ```
 
@@ -27,7 +28,22 @@ docker compose down                   # para a aplicação, preservando os dados
 docker compose up -d                  # inicia novamente
 ```
 
-Se Docker ainda não estiver configurado, siga a [instalação oficial para Ubuntu](https://docs.docker.com/engine/install/ubuntu/) ou habilite sua distribuição na [integração WSL do Docker Desktop](https://docs.docker.com/desktop/features/wsl/). Para instalar o Ubuntu pelo PowerShell do Windows: `wsl --install -d Ubuntu-24.04`. A primeira configuração pode exigir reinício. Não é necessário instalar Python, Node, PostgreSQL ou Ollama no host para executar via Compose.
+O [instalador de dependências](scripts/install-deps.sh) instala os pacotes básicos ausentes (incluindo OpenSSL, curl, certificados e Git). Se já houver Docker, Compose e Buildx acessíveis, ele os reutiliza. Caso contrário, instala Docker Engine pelo [repositório oficial para Ubuntu](https://docs.docker.com/engine/install/ubuntu/), habilita o serviço e configura o grupo `docker` para seu usuário. Execute como seu usuário habitual; os comandos de instalação usam `sudo` quando necessário.
+
+Após entrar no grupo `docker`, sua sessão pode precisar ser atualizada. Se o instalador indicar essa situação, execute `newgrp docker`, confira `docker info` e só então rode o bootstrap. Esse grupo concede acesso administrativo ao daemon, conforme a [documentação Docker](https://docs.docker.com/engine/install/linux-postinstall/). O instalador retorna código `2` quando depende de uma ação de sessão ou reinício do WSL.
+
+Para escolher explicitamente o runtime:
+
+```bash
+bash scripts/install-deps.sh --runtime engine   # Engine nativo no Ubuntu
+bash scripts/install-deps.sh --runtime desktop  # Docker Desktop/Rancher do Windows
+```
+
+No modo `desktop`, inicie o aplicativo no Windows e habilite a distribuição na [integração WSL](https://docs.docker.com/desktop/features/wsl/). O instalador verifica CLI, Compose, Buildx e acesso ao daemon. O modo padrão `auto` reconhece integrações existentes e não instala um segundo Engine sobre elas. Pacotes conflitantes são informados para revisão, sem remoção automática.
+
+Docker Engine nativo exige systemd ativo. Se necessário, o instalador mostra como habilitá-lo em `/etc/wsl.conf`, preservando outras configurações, e reiniciar o WSL conforme as [instruções da Microsoft](https://learn.microsoft.com/windows/wsl/systemd). Depois do reinício, execute o instalador novamente. Ele não reinicia o Windows/WSL nem inicia a aplicação automaticamente.
+
+Para instalar o Ubuntu pelo PowerShell do Windows: `wsl --install -d Ubuntu-24.04`. A primeira configuração pode exigir reinício. Não é necessário instalar Python, Node, PostgreSQL ou Ollama no host para executar via Compose.
 
 Clone no sistema de arquivos Linux (`~/projetos`), para melhor I/O que `/mnt/c`. Se já clonou no Windows, você pode executar o projeto pelo caminho `/mnt/c/...`; o script apenas mostra uma recomendação.
 
@@ -146,6 +162,8 @@ uv run pytest -m integration
 ```
 
 Esses testes verificam o banco real e não precisam baixar o LLM. O workflow [CI](.github/workflows/ci.yml) executa builds, testes e integração num banco isolado. Para testar a geração real, envie o arquivo de exemplo e pergunte seus dados; compare resposta e fontes. Não há taxa de tokens/s garantida sem benchmark na sua CPU.
+
+Os testes do instalador podem ser executados com `bash scripts/tests/test-install-deps.sh` em Linux com Bubblewrap (`bwrap`) e suporte a namespaces de usuário. Eles simulam os comandos de instalação, bloqueiam a rede e mantêm os arquivos do host somente leitura. Bubblewrap e ShellCheck são ferramentas de desenvolvimento opcionais; não são necessários para executar o instalador ou a aplicação.
 
 Consulte [docs/validation.md](docs/validation.md) para as evidências já executadas e as verificações ainda pendentes nesta entrega, incluindo a execução completa do Compose e a geração real pelo Ollama.
 

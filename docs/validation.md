@@ -55,3 +55,9 @@ O daemon Docker do ambiente estava parado, portanto **as imagens não foram cons
 Há um aviso de depreciação do `TestClient` Starlette para seu transporte HTTPX nos testes. A suíte passou; o aviso não afeta o cliente HTTPX usado pela aplicação para falar com Ollama.
 
 Para completar a validação na máquina de destino: execute `bash scripts/bootstrap.sh`, aguarde os modelos, rode `bash scripts/doctor.sh`, envie o exemplo e confira uma resposta com suas fontes. Depois ensaie backup/restauração em outro projeto Compose com volumes novos.
+
+## Instalador de dependências
+
+`scripts/install-deps.sh`, o bootstrap atualizado e `scripts/tests/test-install-deps.sh` passaram na análise ShellCheck. Os **14 cenários** do instalador passaram no WSL Ubuntu 26.04, com uma instalação Ubuntu 24.04 simulada: runtime pronto, dependências básicas ausentes, Desktop indisponível, instalação inicial nativa, execução via sudo, grupo do usuário via sudo com Docker já pronto, daemon nativo parado, pacotes conflitantes, systemd desativado, plugin quebrado, somente Compose ausente, ajuda e argumentos inválidos/incompletos.
+
+O teste usa Bubblewrap com rede desligada, arquivos do host somente leitura e comandos administrativos simulados. Verifica a configuração do repositório oficial, instalação apenas dos pacotes ausentes e orientações de ativação do grupo Docker. Nenhum pacote real foi instalado nem serviço real iniciado por esses testes. Execute com `bash scripts/tests/test-install-deps.sh`; Bubblewrap deve estar disponível e permitir namespaces de usuário.

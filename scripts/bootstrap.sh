@@ -2,11 +2,12 @@
 set -Eeuo pipefail
 cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 
-command -v docker >/dev/null || { echo 'Instale Docker Engine + Compose v2 no Ubuntu, ou habilite a integração WSL do Docker Desktop/Rancher Desktop. Veja README.md.' >&2; exit 1; }
-docker compose version >/dev/null
+command -v docker >/dev/null || { echo 'Execute bash scripts/install-deps.sh para instalar as dependências no Ubuntu WSL.' >&2; exit 1; }
+docker compose version >/dev/null || { echo 'Docker Compose está indisponível. Execute bash scripts/install-deps.sh e confira o runtime Docker.' >&2; exit 1; }
 docker info >/dev/null 2>&1 || { echo 'O daemon Docker não está acessível. Inicie seu runtime Docker e confira a integração com esta distribuição WSL.' >&2; exit 1; }
 
 if [[ -r /etc/os-release ]]; then
+  # shellcheck disable=SC1091
   . /etc/os-release
   if [[ "${ID:-}" != ubuntu || "${VERSION_ID%%.*}" -lt 24 ]]; then
     echo 'Este projeto tem como alvo Ubuntu 24.04+ no WSL2.' >&2
@@ -15,7 +16,7 @@ if [[ -r /etc/os-release ]]; then
 fi
 
 if [[ ! -f .env ]]; then
-  command -v openssl >/dev/null || { echo 'Instale openssl para gerar senhas locais.' >&2; exit 1; }
+  command -v openssl >/dev/null || { echo 'Execute bash scripts/install-deps.sh para instalar openssl e as dependências.' >&2; exit 1; }
   umask 077
   cp .env.example .env
   chmod 600 .env
