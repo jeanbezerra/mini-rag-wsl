@@ -1,0 +1,33 @@
+[project]
+name = "mini-rag"
+version = "0.1.0"
+description = "RAG local para Ubuntu WSL, PostgreSQL 18 e CPU"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "anyio>=4.9,<5",
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.34,<1",
+  "psycopg[binary,pool]>=3.2,<4",
+  "fastembed==0.9.0",
+  "httpx>=0.28,<1",
+  "pydantic-settings>=2.8,<3",
+  "python-multipart>=0.0.20,<1",
+  "pypdf>=6.1,<7",
+  "python-docx>=1.2,<2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.3,<10", "pytest-asyncio>=0.26,<2", "ruff>=0.11,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = ["integration: requires a disposable PostgreSQL 18 database with pgvector"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]

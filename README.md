@@ -1,1 +1,169 @@
-# mini-rag-wsl
+# Mini RAG para WSL
+
+Converse em português com os seus documentos, inteiramente na sua máquina. Aplicação para **Ubuntu 24.04 ou superior no WSL2**, com PostgreSQL **18.6**, pgvector **0.8.7**, chat com streaming e uma biblioteca para upload, seleção, acompanhamento e exclusão de arquivos.
+
+O modelo recebe os trechos recuperados a cada pergunta. A ingestão **não retreina os pesos** do modelo. Não há serviço de IA pago, chave de API ou envio de documentos para uma nuvem.
+
+## Início rápido
+
+Pré-requisitos: Windows com WSL2, Ubuntu 24.04+, Git e Docker com Compose v2. Use **uma** instalação Docker: Engine dentro do Ubuntu ou integração WSL do Docker Desktop/Rancher Desktop. O comando `docker info` precisa funcionar no Ubuntu.
+
+No terminal Ubuntu:
+
+```bash
+mkdir -p ~/projetos
+cd ~/projetos
+git clone https://github.com/jeanbezerra/mini-rag-wsl.git
+cd mini-rag-wsl
+bash scripts/bootstrap.sh
+```
+
+Abra **http://localhost:8080** no Windows. O script cria um `.env` com senhas aleatórias e constrói os serviços. O primeiro início baixa Qwen3 (~1,4 GB) e os embeddings; aguarde o indicador de modelo disponível. As execuções seguintes usam os volumes locais.
+
+```bash
+docker compose logs -f model-init api   # Ctrl+C apenas encerra a exibição
+bash scripts/doctor.sh                 # versões reais, checksums, roles e saúde
+docker compose down                   # para a aplicação, preservando os dados
+docker compose up -d                  # inicia novamente
+```
+
+Se Docker ainda não estiver configurado, siga a [instalação oficial para Ubuntu](https://docs.docker.com/engine/install/ubuntu/) ou habilite sua distribuição na [integração WSL do Docker Desktop](https://docs.docker.com/desktop/features/wsl/). Para instalar o Ubuntu pelo PowerShell do Windows: `wsl --install -d Ubuntu-24.04`. A primeira configuração pode exigir reinício. Não é necessário instalar Python, Node, PostgreSQL ou Ollama no host para executar via Compose.
+
+Clone no sistema de arquivos Linux (`~/projetos`), para melhor I/O que `/mnt/c`. Se já clonou no Windows, você pode executar o projeto pelo caminho `/mnt/c/...`; o script apenas mostra uma recomendação.
+
+## Como usar
+
+1. Na biblioteca, envie um **PDF com texto, TXT, Markdown ou DOCX**. Há um documento fictício em [examples/boas-vindas.md](examples/boas-vindas.md).
+2. Aguarde o estado **Pronto**. A fila fica no PostgreSQL e retoma trabalhos interrompidos após reinício.
+3. Pergunte, por exemplo: “Quem é a responsável pelo Projeto Aurora e qual é o orçamento?”
+4. Abra as fontes da resposta para conferir o trecho e, em PDFs, a página. Você pode restringir a busca aos documentos selecionados.
+5. Use uma nova conversa para mudar de assunto. Conversas ficam no armazenamento local do navegador; documentos e vetores ficam no servidor local.
+
+Uploads são limitados a 25 MB por arquivo, 200 documentos e 2.000 trechos por documento por padrão. PDFs digitalizados sem camada de texto precisam passar por OCR antes do upload. Arquivos protegidos por senha ou sem texto utilizável são apresentados como erro. É possível tentar a ingestão novamente pela interface.
+
+## Modelos e otimização de CPU
+
+| Componente | Padrão | Motivo |
+| --- | --- | --- |
+| Geração | `qwen3:1.7b-q4_K_M` | Modelo pequeno, quantização Q4_K_M, português e licença Apache 2.0 |
+| Embeddings | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | ONNX quantizado, CPU, 384 dimensões, multilíngue, Apache 2.0 |
+| Inferência | Ollama `0.40.8` | Runtime local, streaming e cache do modelo |
+| Recuperação | pgvector + full-text em português | Similaridade semântica e termos exatos combinados por reciprocal rank fusion |
+
+O backend força `num_gpu=0` e `think=false`, mantém um único fluxo de geração, limita contexto/resposta e reutiliza o modelo em memória. O Compose não passa dispositivos GPU ao Ollama. Embeddings usam ONNX Runtime CPU, lotes pequenos e threads limitadas. Os trechos respeitam o tokenizador real e o limite curto do modelo de embeddings, evitando indexar somente o começo de blocos longos.
+
+Como ponto de partida, reserve **8 GB de RAM para o WSL e 4 CPUs**; o consumo e a velocidade dependem do hardware e do tamanho dos documentos. Essa é uma orientação inicial, não um benchmark. Ajuste `CPU_THREADS` no `.env`; mais threads nem sempre melhoram a latência. Durante ingestão há disputa de CPU com o chat.
+
+Para reduzir memória e latência, com perda de qualidade nas respostas:
+
+```dotenv
+# .env
+OLLAMA_MODEL=qwen3:0.6b-q4_K_M
+CPU_THREADS=4
+```
+
+```bash
+docker compose up -d --force-recreate model-init api
+```
+
+O serviço `model-init` baixa o modelo configurado. Aguarde sua conclusão. O modelo anterior continua no cache e pode ser removido manualmente com `docker compose exec ollama ollama rm NOME_DO_MODELO` quando não estiver em uso.
+
+Se necessário, configure a memória global do WSL em `%UserProfile%\.wslconfig` no Windows, conforme os [recursos oficiais do WSL](https://learn.microsoft.com/windows/wsl/wsl-config). Depois de salvar, `wsl --shutdown` aplica a mudança e encerra **todas** as distribuições WSL abertas.
+
+```ini
+[wsl2]
+memory=8GB
+processors=4
+swap=4GB
+```
+
+## Arquitetura e persistência
+
+```mermaid
+flowchart LR
+  UI[React + Fluent UI] --> N[Nginx :8080]
+  N --> A[FastAPI]
+  A --> P[(PostgreSQL 18 + pgvector)]
+  A --> O[Ollama / Qwen3 CPU]
+  A --> W[Fila persistente / ingestão]
+  W --> E[FastEmbed / ONNX CPU]
+  E --> P
+  W --> F[Arquivos locais]
+```
+
+- `frontend/`: React, TypeScript, Vite, Fluent UI v9 e Nginx; interface e APIs compartilham a mesma origem.
+- `backend/`: FastAPI, extração de documentos, fila, embeddings e recuperação híbrida. Um único worker Uvicorn mantém o orçamento de memória e a serialização da geração.
+- `database/`: PostgreSQL oficial 18.6 com pgvector compilado em uma etapa separada. `OPTFLAGS=""` evita exigir instruções específicas da CPU da máquina que construiu a imagem.
+- `migrate`: job único, com role `rag_migrator`, aplica o schema versionado antes da API.
+- `model-init`: baixa o modelo para o Ollama sem bloquear a disponibilidade da interface.
+
+| Volume Compose | Conteúdo |
+| --- | --- |
+| `postgres_data` | Banco, textos, metadados, fila e vetores; montado em `/var/lib/postgresql`, conforme layout do PostgreSQL 18 |
+| `app_data` | Arquivos enviados e cache dos embeddings em `/data` |
+| `ollama_models` | Modelos de geração |
+
+**Não use `docker compose down -v` para parar a aplicação:** essa opção remove os volumes e seus dados. Preserve o `.env`; mudar apenas as senhas nele não altera roles de um banco já inicializado. Scripts em `database/init` executam somente no primeiro início de um volume vazio. Atualizações de schema usam o job `migrate`.
+
+## Segurança e limites de uso
+
+A única porta publicada é `127.0.0.1:8080`; PostgreSQL e Ollama ficam na rede interna do Compose. A API usa `rag_app`, sem superuser ou DDL; a role de migração tem credenciais separadas e não é disponibilizada à API. Consultas são parametrizadas e a API roda como usuário sem privilégios. O banco mantém checksums, WAL e durabilidade padrão.
+
+Esta é uma aplicação **pessoal local, sem autenticação e sem isolamento entre usuários**. Quem acessar a interface tem acesso à biblioteca. Se precisar de acesso por rede, acrescente autenticação e TLS antes de mudar a publicação da porta. Documentos são dados não confiáveis no prompt; um modelo pequeno ainda pode errar ou seguir instruções contidas nos documentos. Confira as fontes.
+
+O primeiro build e os downloads de modelos precisam de internet. Depois que as imagens e os dois modelos estiverem no cache, as respostas são processadas localmente. Os documentos e o histórico do chat não são enviados para APIs de IA externas.
+
+## Desenvolvimento e validação
+
+Use Python **3.12**, [uv](https://docs.astral.sh/uv/) e Node **22+** para desenvolvimento fora dos containers. O projeto inclui locks de dependências.
+
+```bash
+# Backend
+cd backend
+uv sync --frozen
+uv run ruff check .
+uv run pytest -m 'not integration'
+
+# Frontend (outro terminal)
+cd frontend
+npm ci
+npm test
+npm run build
+```
+
+Para integração, use um **banco descartável** PostgreSQL 18 com pgvector. O override de testes publica o banco somente para localhost, porta 55432:
+
+```bash
+# Na raiz, após gerar .env pelo bootstrap
+docker compose -p mini-rag-test -f compose.yaml -f compose.test.yaml up --build -d --wait db
+```
+
+No terminal de testes, defina `TEST_DATABASE_URL` para a role `rag_app` e `TEST_MIGRATION_DATABASE_URL` para `rag_migrator`, usando as senhas do seu `.env`, host `localhost`, porta `55432`, banco `mini_rag`. Depois:
+
+```bash
+cd backend
+uv run pytest -m integration
+```
+
+Esses testes verificam o banco real e não precisam baixar o LLM. O workflow [CI](.github/workflows/ci.yml) executa builds, testes e integração num banco isolado. Para testar a geração real, envie o arquivo de exemplo e pergunte seus dados; compare resposta e fontes. Não há taxa de tokens/s garantida sem benchmark na sua CPU.
+
+Consulte [docs/validation.md](docs/validation.md) para as evidências já executadas e as verificações ainda pendentes nesta entrega, incluindo a execução completa do Compose e a geração real pelo Ollama.
+
+O proxy Vite usa `http://localhost:8000` para `/api`. Para desenvolvimento completo, disponibilize o banco de teste, execute `DATABASE_URL=... uv run python -m rag.migrate` com a role migrator e então `DATABASE_URL=... OLLAMA_BASE_URL=http://localhost:11434 DATA_DIR=./data uv run uvicorn rag.app:app --reload` com a role app. Configure seu Ollama local e baixe o modelo. O fluxo normal via Compose dispensa essa configuração manual.
+
+## Backup
+
+```bash
+bash scripts/backup.sh
+```
+
+O script pausa a API, exporta o banco em formato custom e arquiva os documentos/cache; reativa a API ao terminar, inclusive em caso de falha. Os arquivos ficam em `backups/` com SHA-256. Guarde separadamente o `.env`. Os pesos Ollama podem ser baixados novamente.
+
+Para um ensaio de recuperação, inicialize um **outro projeto Compose com volumes novos**, pare sua API, restaure `database.dump` com `pg_restore` no banco novo e extraia `app-data.tar.gz` no novo volume `app_data`, preservando o usuário 10001. Use `--clean --if-exists` somente no banco novo de teste, com as roles de bootstrap já criadas. Um backup só deve ser considerado recuperável depois desse ensaio. Nunca restaure sobre o único ambiente que contém seus dados.
+
+## Referências das escolhas
+
+- [Qwen3 1.7B Q4_K_M no catálogo oficial](https://ollama.com/library/qwen3:1.7b-q4_K_M) e [licença do modelo](https://huggingface.co/Qwen/Qwen3-1.7B).
+- [FastEmbed e modelos suportados](https://qdrant.tech/documentation/embeddings/fastembed/) e [modelo multilíngue](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2).
+- [API de chat Ollama](https://docs.ollama.com/api/chat) e [execução em CPU com Docker](https://docs.ollama.com/docker).
+- [PostgreSQL 18.6](https://www.postgresql.org/docs/release/18.6/), [layout da imagem oficial](https://hub.docker.com/_/postgres) e [pgvector](https://github.com/pgvector/pgvector).

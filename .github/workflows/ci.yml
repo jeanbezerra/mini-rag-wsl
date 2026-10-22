@@ -1,0 +1,52 @@
+name: Checks
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  backend:
+    runs-on: ubuntu-24.04
+    env:
+      POSTGRES_PASSWORD: ci_admin_password_00000001
+      APP_DB_PASSWORD: ci_app_password_0000000001
+      MIGRATOR_DB_PASSWORD: ci_migrator_password_00001
+      TEST_DATABASE_URL: postgresql://rag_app:ci_app_password_0000000001@localhost:55432/mini_rag
+      TEST_MIGRATION_DATABASE_URL: postgresql://rag_migrator:ci_migrator_password_00001@localhost:55432/mini_rag
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.0'
+          python-version: '3.12'
+      - run: uv sync --frozen
+        working-directory: backend
+      - run: uv run ruff check .
+        working-directory: backend
+      - run: uv run pytest -m 'not integration'
+        working-directory: backend
+      - run: docker compose -p mini-rag-ci -f compose.yaml -f compose.test.yaml up --build -d --wait db
+      - run: uv run pytest -m integration
+        working-directory: backend
+      - if: always()
+        run: docker compose -p mini-rag-ci -f compose.yaml -f compose.test.yaml logs db
+      - if: always()
+        run: docker compose -p mini-rag-ci -f compose.yaml -f compose.test.yaml down -v

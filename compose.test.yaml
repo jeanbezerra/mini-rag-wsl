@@ -1,0 +1,5 @@
+# Only for isolated integration tests. Never add this override to normal startup.
+services:
+  db:
+    ports:
+      - '127.0.0.1:55432:5432'
