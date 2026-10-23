@@ -47,6 +47,42 @@ Para instalar o Ubuntu pelo PowerShell do Windows: `wsl --install -d Ubuntu-24.0
 
 Clone no sistema de arquivos Linux (`~/projetos`), para melhor I/O que `/mnt/c`. Se já clonou no Windows, você pode executar o projeto pelo caminho `/mnt/c/...`; o script apenas mostra uma recomendação.
 
+## Preparar um WSL que já tem Kubernetes
+
+Use [scripts/cleanup-wsl.sh](scripts/cleanup-wsl.sh) para migrar um Ubuntu WSL com Kubernetes instalado por APT/kubeadm para Docker CE. Primeiro confira o plano, sem alterar o sistema:
+
+```bash
+bash scripts/cleanup-wsl.sh
+```
+
+O script reconhece pacotes Kubernetes marcados como `hold` e seleciona somente os pacotes Kubernetes e os conflitos Docker conhecidos, incluindo `containerd`, `runc` e `docker.io`. Simula a resolução APT e recusa remoções adicionais fora da lista. Não usa `autoremove`.
+
+Se houver um nó Kubernetes configurado, sua remoção exige a opção abaixo. Ela autoriza o reset local, interrompe pods e pode destruir dados locais; salve o que precisa antes. Você pode visualizar esse plano completo sem aplicá-lo:
+
+```bash
+bash scripts/cleanup-wsl.sh --delete-cluster-data
+```
+
+Para aplicar a remoção do nó e dos pacotes selecionados:
+
+```bash
+bash scripts/cleanup-wsl.sh --apply --delete-cluster-data
+```
+
+Se não existir nó configurado, `bash scripts/cleanup-wsl.sh --apply` basta. O reset usa o socket CRI Unix local do containerd e ignora a fase que remove membros etcd, conforme as opções do [kubeadm reset](https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-reset/). O script não executa `kubectl`, limpeza global de iptables, remoção de volumes Docker nem exclusão de distribuições WSL. Mantém o kubeconfig do usuário e não purga diretórios CNI/etcd indiscriminadamente.
+
+K3s, RKE2, MicroK8s e k0s são detectados e exigem seus próprios procedimentos de desinstalação; o script interrompe a aplicação para essas instalações. Clusters kind/minikube e suas VMs/containers não são gerenciados por este script.
+
+Se a CLI Docker vier de **Rancher Desktop ou Docker Desktop**, desative a integração desta distribuição nas configurações do aplicativo Windows antes de instalar o Engine nativo. O Kubernetes gerenciado por esse aplicativo também deve ser desativado nele. O script mostra a integração detectada e não altera aplicativos Windows ou o PATH automaticamente.
+
+Depois da limpeza e do ajuste da integração externa, execute:
+
+```bash
+bash scripts/install-deps.sh --runtime engine
+# Siga eventuais instruções de newgrp docker e então:
+bash scripts/bootstrap.sh
+```
+
 ## Como usar
 
 1. Na biblioteca, envie um **PDF com texto, TXT, Markdown ou DOCX**. Há um documento fictício em [examples/boas-vindas.md](examples/boas-vindas.md).
@@ -163,7 +199,9 @@ uv run pytest -m integration
 
 Esses testes verificam o banco real e não precisam baixar o LLM. O workflow [CI](.github/workflows/ci.yml) executa builds, testes e integração num banco isolado. Para testar a geração real, envie o arquivo de exemplo e pergunte seus dados; compare resposta e fontes. Não há taxa de tokens/s garantida sem benchmark na sua CPU.
 
-Os testes do instalador podem ser executados com `bash scripts/tests/test-install-deps.sh` em Linux com Bubblewrap (`bwrap`) e suporte a namespaces de usuário. Eles simulam os comandos de instalação, bloqueiam a rede e mantêm os arquivos do host somente leitura. Bubblewrap e ShellCheck são ferramentas de desenvolvimento opcionais; não são necessários para executar o instalador ou a aplicação.
+Os testes dos scripts podem ser executados com `bash scripts/tests/test-install-deps.sh` e `bash scripts/tests/test-cleanup-wsl.sh` em Linux com Bubblewrap (`bwrap`) e suporte a namespaces de usuário. Eles simulam os comandos administrativos, bloqueiam a rede e mantêm os arquivos do host somente leitura. Bubblewrap e ShellCheck são ferramentas de desenvolvimento opcionais; não são necessários para executar o instalador ou a aplicação.
+
+O teste de limpeza também usa Python 3 para criar um socket Unix fictício; isso não adiciona uma dependência ao script de limpeza em si.
 
 Consulte [docs/validation.md](docs/validation.md) para as evidências já executadas e as verificações ainda pendentes nesta entrega, incluindo a execução completa do Compose e a geração real pelo Ollama.
 

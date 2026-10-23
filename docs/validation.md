@@ -61,3 +61,11 @@ Para completar a validação na máquina de destino: execute `bash scripts/boots
 `scripts/install-deps.sh`, o bootstrap atualizado e `scripts/tests/test-install-deps.sh` passaram na análise ShellCheck. Os **14 cenários** do instalador passaram no WSL Ubuntu 26.04, com uma instalação Ubuntu 24.04 simulada: runtime pronto, dependências básicas ausentes, Desktop indisponível, instalação inicial nativa, execução via sudo, grupo do usuário via sudo com Docker já pronto, daemon nativo parado, pacotes conflitantes, systemd desativado, plugin quebrado, somente Compose ausente, ajuda e argumentos inválidos/incompletos.
 
 O teste usa Bubblewrap com rede desligada, arquivos do host somente leitura e comandos administrativos simulados. Verifica a configuração do repositório oficial, instalação apenas dos pacotes ausentes e orientações de ativação do grupo Docker. Nenhum pacote real foi instalado nem serviço real iniciado por esses testes. Execute com `bash scripts/tests/test-install-deps.sh`; Bubblewrap deve estar disponível e permitir namespaces de usuário.
+
+## Limpeza de Kubernetes no WSL
+
+`scripts/cleanup-wsl.sh` e seus testes passaram no ShellCheck. Os **24 cenários** de `scripts/tests/test-cleanup-wsl.sh` passaram com Bubblewrap, rede desligada e comandos administrativos simulados. Cobrem pacotes held, simulação sem mutações, reset local explícito, preservação de Docker CE e seus dados, dependências APT extras, falhas de resolução APT, ausência de kubeadm/socket/systemd, instalações Kubernetes alternativas, repetição sem pacotes e argumentos inválidos.
+
+Também foram executadas duas prévias reais no Ubuntu 26.04 WSL: a padrão e a de reset com `--delete-cluster-data`, ambas **sem `--apply`**. O APT identificou exatamente sete pacotes (kubeadm, kubelet, kubectl, kubernetes-cni, cri-tools, containerd e runc), cinco deles marcados como hold, e nenhuma dependência extra para remoção. O `kubeadm reset --help` instalado confirmou suporte aos parâmetros usados. Nenhum nó real foi reinicializado, serviço parado ou pacote removido.
+
+O detector do instalador foi corrigido para reconhecer tanto `install ok installed` quanto `hold ok installed`. Os 14 testes do instalador continuaram passando. A remoção real permanece uma ação explícita do usuário na máquina de destino; o script não altera a integração Rancher/Desktop do Windows.

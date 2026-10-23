@@ -64,7 +64,7 @@ as_root() {
 }
 
 installed() {
-  [[ $(dpkg-query -W -f='${Status}' "$1" 2>/dev/null) == 'install ok installed' ]]
+  [[ $(dpkg-query -W -f='${Status}' "$1" 2>/dev/null) == *' ok installed' ]]
 }
 
 update_apt() {
