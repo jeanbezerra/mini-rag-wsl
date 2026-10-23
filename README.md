@@ -134,6 +134,16 @@ Metadados de tokenização, páginas e tempos são registrados nas novas ingest�
 
 O histórico de desempenho mantém até 500 operações de chat e 500 ingestões no PostgreSQL. Não armazena perguntas ou respostas nessa telemetria. A velocidade de geração depende das contagens e dos tempos informados pelo Ollama; sem esses dados, o indicador fica sem amostra. A ausência de medição não é apresentada como zero.
 
+## MCP no VS Code
+
+O bootstrap também inicia o serviço MCP na porta **8001**. Para atualizar uma instalação existente, execute `docker compose up --build -d`. O serviço oferece **SSE em `http://127.0.0.1:8001/sse`** e **Streamable HTTP em `http://127.0.0.1:8001/mcp`**.
+
+Abra este repositório no VS Code, inicie o servidor **mini-rag** pela configuração [`.vscode/mcp.json`](.vscode/mcp.json) e habilite suas ferramentas no chat de agente. A configuração padrão usa Streamable HTTP; para usar SSE, copie a entrada de [examples/mcp-vscode-sse.json](examples/mcp-vscode-sse.json). Há também um [exemplo portátil para o runtime Copilot](examples/mcp-copilot.json), no formato `.mcp.json`.
+
+O cliente pode pesquisar documentos, consultar seus trechos e inspecionar o estado da biblioteca e o desempenho. As ferramentas são de leitura. A recuperação reutiliza o modelo de embeddings em CPU do RAG; o modelo escolhido no cliente MCP redige a resposta. Se esse cliente usar IA na nuvem, os trechos consultados poderão ser enviados ao provedor do cliente.
+
+Consulte [docs/mcp.md](docs/mcp.md) para configuração SSE, ferramentas, parâmetros, execução local e diagnóstico. Não há contas ou autenticação; o serviço é publicado somente em localhost.
+
 ## Modelos e otimização de CPU
 
 | Componente | Padrão | Motivo |
@@ -170,6 +180,8 @@ swap=4GB
 flowchart LR
   UI[React + Fluent UI] --> N[Nginx :8080]
   N --> A[FastAPI]
+  V[VS Code / cliente MCP] --> M[MCP :8001 / SSE e HTTP]
+  M --> A
   A --> P[(PostgreSQL 18 + pgvector)]
   A --> O[Ollama / Qwen3 CPU]
   A --> W[Fila persistente / ingestão]
@@ -180,6 +192,7 @@ flowchart LR
 
 - `frontend/`: React, TypeScript, Vite, Fluent UI v9 e Nginx; interface e APIs compartilham a mesma origem.
 - `backend/`: FastAPI, extração de documentos, fila, embeddings e recuperação híbrida. Um único worker Uvicorn mantém o orçamento de memória e a serialização da geração.
+- `mcp-server/`: serviço MCP independente com SSE e Streamable HTTP; consulta a API existente sem carregar outro modelo ou acessar o banco diretamente.
 - `database/`: PostgreSQL oficial 18.6 com pgvector compilado em uma etapa separada. `OPTFLAGS=""` evita exigir instruções específicas da CPU da máquina que construiu a imagem.
 - `migrate`: job único, com role `rag_migrator`, aplica o schema versionado antes da API.
 - `model-init`: baixa o modelo para o Ollama sem bloquear a disponibilidade da interface.
@@ -196,11 +209,11 @@ As configurações globais e as medições da biblioteca também ficam no Postgr
 
 ## Segurança e limites de uso
 
-A única porta publicada é `127.0.0.1:8080`; PostgreSQL e Ollama ficam na rede interna do Compose. A API usa `rag_app`, sem superuser ou DDL; a role de migração tem credenciais separadas e não é disponibilizada à API. Consultas são parametrizadas e a API roda como usuário sem privilégios. O banco mantém checksums, WAL e durabilidade padrão.
+As portas publicadas são `127.0.0.1:8080` para o frontend e `127.0.0.1:8001` para o MCP; PostgreSQL e Ollama ficam na rede interna do Compose. A API usa `rag_app`, sem superuser ou DDL; a role de migração tem credenciais separadas e não é disponibilizada à API. Consultas são parametrizadas e os serviços Python rodam como usuários sem privilégios. O banco mantém checksums, WAL e durabilidade padrão.
 
 Esta é uma aplicação **de acesso compartilhado, sem autenticação ou contas de usuário**. Quem acessar a interface pode usar a biblioteca, conversar e alterar as configurações globais. A publicação padrão permanece em localhost; o alcance do acesso depende da configuração de rede do host. Documentos são dados não confiáveis no prompt; um modelo pequeno ainda pode errar ou seguir instruções contidas nos documentos. Confira as fontes.
 
-O primeiro build e os downloads de modelos precisam de internet. Depois que as imagens e os dois modelos estiverem no cache, as respostas são processadas localmente. Os documentos e o histórico do chat não são enviados para APIs de IA externas.
+O primeiro build e os downloads de modelos precisam de internet. Depois que as imagens e os dois modelos estiverem no cache, as respostas do chat do Mini RAG são processadas localmente, sem enviar documentos ou histórico para APIs de IA externas. Ao conectar um cliente MCP com modelo na nuvem, os trechos retornados poderão ser enviados ao provedor escolhido nesse cliente.
 
 ## Desenvolvimento e validação
 
@@ -218,6 +231,12 @@ cd frontend
 npm ci
 npm test
 npm run build
+
+# Serviço MCP (outro terminal)
+cd mcp-server
+uv sync --frozen
+uv run ruff check .
+uv run pytest
 ```
 
 Para integração, use um **banco descartável** PostgreSQL 18 com pgvector. O override de testes publica o banco somente para localhost, porta 55432:
@@ -261,3 +280,4 @@ Para um ensaio de recuperação, inicialize um **outro projeto Compose com volum
 - [API de chat Ollama](https://docs.ollama.com/api/chat) e [execução em CPU com Docker](https://docs.ollama.com/docker).
 - [PostgreSQL 18.6](https://www.postgresql.org/docs/release/18.6/), [layout da imagem oficial](https://hub.docker.com/_/postgres) e [pgvector](https://github.com/pgvector/pgvector).
 - [Apache ECharts](https://echarts.apache.org/handbook/en/get-started/) e [acessibilidade dos gráficos](https://echarts.apache.org/handbook/en/best-practices/aria/).
+- [Configuração MCP no VS Code](https://code.visualstudio.com/docs/agents/reference/mcp-configuration), [transportes MCP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports) e [SDK Python oficial](https://github.com/modelcontextprotocol/python-sdk).

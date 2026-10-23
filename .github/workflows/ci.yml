@@ -23,6 +23,22 @@ jobs:
       - run: npm run build
         working-directory: frontend
 
+  mcp:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.13.0'
+          python-version: '3.12'
+      - run: uv sync --frozen
+        working-directory: mcp-server
+      - run: uv run ruff check .
+        working-directory: mcp-server
+      - run: uv run pytest
+        working-directory: mcp-server
+      - run: docker build -t mini-rag-mcp:ci ./mcp-server
+
   backend:
     runs-on: ubuntu-24.04
     env:

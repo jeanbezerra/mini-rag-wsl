@@ -51,6 +51,8 @@ docker compose config --quiet
 docker compose up --build -d
 echo
 echo 'Aplicação iniciando. Frontend: http://localhost:'"$(sed -n 's/^APP_PORT=//p' .env | head -n1)"
+mcp_port=$(sed -n 's/^MCP_PORT=//p' .env | head -n1)
+echo "MCP: http://127.0.0.1:${mcp_port:-8001}/sse | http://127.0.0.1:${mcp_port:-8001}/mcp"
 echo 'O primeiro uso baixa o modelo (~1,4 GB) e os embeddings. Acompanhe:'
 echo '  docker compose logs -f model-init api'
 echo 'Verifique: bash scripts/doctor.sh'

@@ -25,6 +25,7 @@ from rag.runtime import InvalidModel, Runtime, RuntimeBusy, SettingsConflict
 
 logger = logging.getLogger(__name__)
 SUPPORTED = {".pdf", ".txt", ".md", ".docx"}
+SEARCH_QUEUE_TIMEOUT_SECONDS = 120
 
 
 class HistoryMessage(BaseModel):
@@ -45,6 +46,45 @@ class ChatRequest(BaseModel):
         if len(value.encode("utf-8")) > 1500:
             raise ValueError("Pergunta muito longa; limite de 1500 bytes UTF-8.")
         return value.strip()
+
+
+class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    query: str = Field(min_length=1, max_length=2000)
+    # HTTP clients send UUIDs as JSON strings; all other input types remain strict.
+    document_ids: list[Annotated[UUID, Field(strict=False)]] | None = Field(
+        default=None, max_length=10000
+    )
+    limit: int | None = Field(default=None, ge=1, le=12)
+
+    @field_validator("query")
+    @classmethod
+    def not_blank(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("Escreva uma consulta.")
+        if len(value.encode("utf-8")) > 1500:
+            raise ValueError("Consulta muito longa; limite de 1500 bytes UTF-8.")
+        return value
+
+
+class SearchSource(BaseModel):
+    id: UUID
+    document_id: UUID
+    name: str
+    page: int | None
+    content: str
+    score: float
+
+
+class SearchResponse(BaseModel):
+    query: str
+    sources: list[SearchSource]
+    count: int
+    limit: int
+    score_type: Literal["rrf"] = "rrf"
+    embedding_model: str
 
 
 class SettingsUpdate(BaseModel):
@@ -91,6 +131,11 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
 
     @app.middleware("http")
     async def upload_size_guard(request: Request, call_next):
+        if request.method == "POST" and request.url.path == "/api/search":
+            # Preserve Uvicorn's receive channel. BaseHTTPMiddleware wraps the
+            # endpoint's channel with a checkpoint that defeats cancellation-based
+            # Request.is_disconnected polling, even after the socket has closed.
+            request.state.search_disconnect_receive = request.receive
         # Bound the entire multipart request before Starlette spools it. Route-level
         # streaming alone is too late: multipart parsing happens before the endpoint.
         if request.method == "POST" and request.url.path == "/api/documents":
@@ -292,6 +337,78 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
         if document is None:
             raise HTTPException(409, "Documento inexistente ou não está com erro.")
         return document
+
+    async def retrieve(body: SearchRequest):
+        if state.embedder.status != "ready":
+            raise HTTPException(
+                503, "O modelo de busca está carregando. Aguarde e tente novamente."
+            )
+        try:
+            async with asyncio.timeout(SEARCH_QUEUE_TIMEOUT_SECONDS):
+                await state.inference_lock.acquire()
+        except TimeoutError as exc:
+            raise HTTPException(
+                503, "A busca está ocupada com outra operação. Tente novamente."
+            ) from exc
+        try:
+            # Keep one snapshot and the shared CPU lock through retrieval. Settings
+            # updates cannot replace the embedder or similarity threshold midway.
+            active = state.settings
+            if state.embedder.status != "ready":
+                raise HTTPException(
+                    503, "O modelo de busca está carregando. Aguarde e tente novamente."
+                )
+            limit = body.limit if body.limit is not None else active.retrieval_top_k
+            embedding = await native_call(state.embedder.query, body.query)
+            sources = await state.db.search(body.query, embedding, body.document_ids, limit)
+            return SearchResponse(
+                query=body.query,
+                sources=sources,
+                count=len(sources),
+                limit=limit,
+                embedding_model=active.embedding_model,
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Document retrieval failed")
+            raise HTTPException(
+                503, "Não foi possível consultar a biblioteca. Aguarde e tente novamente."
+            ) from exc
+        finally:
+            state.inference_lock.release()
+
+    @app.post("/api/search", response_model=SearchResponse)
+    async def search(body: SearchRequest, request: Request):
+        # FastAPI does not cancel a regular response handler when its socket
+        # disconnects. Stop abandoned queued searches, while native_call still
+        # keeps the CPU lock until an embedding already in progress finishes.
+        operation = asyncio.create_task(retrieve(body))
+        disconnected = False
+        receive = getattr(request.state, "search_disconnect_receive", request.receive)
+
+        async def cancel_on_disconnect():
+            nonlocal disconnected
+            while True:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    disconnected = True
+                    operation.cancel()
+                    return
+
+        watcher = asyncio.create_task(cancel_on_disconnect())
+        try:
+            return await operation
+        except asyncio.CancelledError:
+            if disconnected:
+                # The client has already closed the connection; this status is
+                # useful in access logs and avoids treating cancellation as 500.
+                raise HTTPException(499, "Consulta cancelada pelo cliente.") from None
+            raise
+        finally:
+            watcher.cancel()
+            with anyio.CancelScope(shield=True):
+                await asyncio.gather(watcher, return_exceptions=True)
 
     @app.post("/api/chat")
     async def chat(body: ChatRequest, request: Request):

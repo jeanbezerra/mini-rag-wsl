@@ -17,3 +17,5 @@ docker compose exec -T ollama ollama list
 docker compose exec -T ollama ollama ps
 echo '=== Saúde da aplicação ==='
 docker compose exec -T api python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/api/health', timeout=10).read().decode())"
+echo '=== Serviço MCP ==='
+docker compose exec -T mcp python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8001/healthz', timeout=5).read().decode())"
