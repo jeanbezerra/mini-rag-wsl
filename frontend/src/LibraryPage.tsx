@@ -10,6 +10,7 @@ import LibraryPerformance from './LibraryPerformance';
 import LibraryDocumentDetail from './LibraryDocumentDetail';
 import type { LibrarySort, LibraryStatus } from './libraryTypes';
 import type { ChartSpec } from './LibraryChart';
+import AppearanceMenu from './AppearanceMenu';
 
 type Section = 'collection' | 'indexing' | 'performance';
 export default function LibraryPage({ onBack, onDocumentsChanged }: { onBack: () => void; onDocumentsChanged: () => void }) {
@@ -32,7 +33,7 @@ export default function LibraryPage({ onBack, onDocumentsChanged }: { onBack: ()
     });
   };
   return <div className={styles.page}>
-    <header className={styles.header}><div className={styles.titleRow}><Button icon={<ArrowLeftRegular />} appearance="subtle" onClick={selected ? closeDetail : onBack}>{selected ? 'Voltar' : 'Conversa'}</Button><span className={styles.titleIcon}><LibraryRegular aria-hidden /></span><h1 className={styles.heading} ref={heading} tabIndex={-1}>Biblioteca</h1></div><Button icon={summary.loading ? <Spinner size="tiny" /> : <ArrowClockwiseRegular />} appearance="subtle" onClick={refresh}>Atualizar</Button></header>
+    <header className={styles.header}><div className={styles.titleRow}><Button className={styles.iconButton} icon={<ArrowLeftRegular />} appearance="subtle" aria-label={selected ? 'Voltar' : 'Conversa'} onClick={selected ? closeDetail : onBack}><span className={styles.desktopText}>{selected ? 'Voltar' : 'Conversa'}</span></Button><span className={styles.titleIcon}><LibraryRegular aria-hidden /></span><h1 className={styles.heading} ref={heading} tabIndex={-1}>Biblioteca</h1></div><div className={styles.row}><Button className={styles.iconButton} icon={summary.loading ? <Spinner size="tiny" aria-hidden /> : <ArrowClockwiseRegular />} appearance="subtle" aria-label="Atualizar" onClick={refresh}><span className={styles.desktopText}>Atualizar</span></Button><AppearanceMenu /></div></header>
     {!selected && <div className={styles.tabs}><TabList aria-label="Contexto da biblioteca" selectedValue={section} onTabSelect={(_, value) => setSection(value.value as Section)}><Tab id="library-tab-collection" value="collection" icon={{ children: <LibraryRegular />, className: styles.tabIcon }}>Acervo</Tab><Tab id="library-tab-indexing" value="indexing" icon={{ children: <ChartMultipleRegular />, className: styles.tabIcon }}>Indexação</Tab><Tab id="library-tab-performance" value="performance" icon={{ children: <DataTrendingRegular />, className: styles.tabIcon }}>Desempenho</Tab></TabList></div>}
     <main className={styles.scroll} aria-label={selected ? `Detalhes de ${selected.name}` : 'Gerenciamento da biblioteca'}><div className={styles.content}>
       {selected && <LibraryDocumentDetail id={selected.id} name={selected.name} version={version} onChange={changed} onRemoved={closeDetail} />}<div role="tabpanel" id={`library-panel-${section}`} aria-labelledby={`library-tab-${section}`} className={styles.content} style={selected ? { display: 'none' } : undefined} aria-busy={summary.loading}>

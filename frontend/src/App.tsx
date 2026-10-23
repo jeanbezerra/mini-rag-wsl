@@ -12,8 +12,9 @@ import {
 } from '@fluentui/react-icons';
 import Markdown from 'react-markdown';
 import { api, errorMessage, sendChat, uploadDocument } from './api';
-import { DocumentCard, SourceLink } from './components';
+import { CodeBlock, DocumentCard, SourceLink } from './components';
 import SettingsPage from './SettingsPage';
+import AppearanceMenu from './AppearanceMenu';
 import { loadConversations, newConversation, STORAGE_KEY } from './storage';
 import { useStyles } from './styles';
 import type { Conversation, Health, Message, RagDocument } from './types';
@@ -243,12 +244,13 @@ export default function App() {
           <div className={styles.headerTitle}><h1 className={styles.heading}>Converse com seus documentos</h1><span className={mergeClasses(styles.small, styles.desktopText)}>Respostas com contexto. Fontes para conferir.</span></div>
         </div>
         <div className={styles.headerActions}>
-          <Button ref={settingsToggleRef} icon={<SettingsRegular />} appearance="subtle" aria-label="Configurações" onClick={openSettings}><span className={styles.desktopText}>Configurações</span></Button>
+          <AppearanceMenu />
+          <Button ref={settingsToggleRef} className={styles.compactHeaderButton} icon={<SettingsRegular />} appearance="subtle" aria-label="Configurações" onClick={openSettings}><span className={styles.desktopText}>Configurações</span></Button>
           <Popover positioning="below-end">
             <PopoverTrigger disableButtonEnhancement><Button size="small" appearance="subtle" icon={<ServerRegular />} aria-label="Ver status do ambiente local"><Badge appearance="tint" color={modelReady ? 'success' : healthError ? 'danger' : 'warning'}>{modelReady ? 'CPU · pronto' : healthError ? 'Offline' : !health ? 'Conectando' : 'Preparando'}</Badge></Button></PopoverTrigger>
             <PopoverSurface><div className={styles.healthGrid}><strong>Ambiente local</strong><div className={styles.healthRow}><DatabaseRegular aria-hidden /><div><p>PostgreSQL · {health?.database.status || 'sem conexão'}</p><code>{health?.database.version}</code></div></div><div className={styles.healthRow}><ServerRegular aria-hidden /><div><p>Modelo · {health?.model.status || 'desconhecido'}</p><code>{health?.model.name || 'Aguardando o servidor'}</code></div></div><div className={styles.healthRow}><DocumentSearchRegular aria-hidden /><div><p>Embeddings · {health?.embedding.status || 'desconhecido'}</p><code>{health?.embedding.name || 'Aguardando o servidor'}</code></div></div><Button icon={<ArrowClockwiseRegular />} onClick={() => { void refreshHealth(); }}>Verificar conexão</Button></div></PopoverSurface>
           </Popover>
-          <Button ref={libraryToggleRef} icon={<FolderOpenRegular />} appearance={libraryOpen ? 'secondary' : 'outline'} aria-label="Biblioteca de documentos" aria-expanded={libraryOpen} aria-controls="library" onClick={() => setLibraryOpen(!libraryOpen)}><span className={styles.desktopText}>Biblioteca</span><span aria-hidden className={styles.libraryCount}>{documents.length}</span></Button>
+          <Button ref={libraryToggleRef} className={styles.compactHeaderButton} icon={<FolderOpenRegular />} appearance={libraryOpen ? 'secondary' : 'outline'} aria-label="Biblioteca de documentos" aria-expanded={libraryOpen} aria-controls="library" onClick={() => setLibraryOpen(!libraryOpen)}><span className={styles.desktopText}>Biblioteca</span><span aria-hidden className={styles.libraryCount}>{documents.length}</span></Button>
         </div>
       </header>
       <div className={styles.content}>
@@ -274,8 +276,8 @@ export default function App() {
                 <div className={mergeClasses(styles.messageIcon, message.role === 'user' && styles.userIcon)}>{message.role === 'user' ? <PersonRegular aria-hidden /> : <SparkleRegular aria-hidden />}</div>
                 <div className={styles.messageBody}><span className={styles.messageLabel}>{message.role === 'user' ? 'Você' : 'Mini RAG'}</span>
                   {message.role === 'user' ? <p className={styles.userText}>{message.content}</p> : <>
-                    <div className={styles.markdown}><Markdown skipHtml disallowedElements={['img', 'iframe', 'script', 'style']} components={{ a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> }}>{message.content}</Markdown></div>
-                    {pending && <div className={styles.answerStatus}><Spinner size="extra-tiny" />{chatStatus}</div>}
+                    <div className={styles.markdown}><Markdown skipHtml disallowedElements={['img', 'iframe', 'script', 'style']} components={{ a: ({ children, href }) => <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>, pre: ({ children }) => <CodeBlock>{children}</CodeBlock> }}>{message.content}</Markdown></div>
+                    {pending && <div className={styles.answerStatus}><Spinner size="extra-tiny" aria-hidden />{chatStatus}</div>}
                     {message.state === 'error' && <MessageBar intent="error"><MessageBarBody>{message.error}</MessageBarBody></MessageBar>}
                     {message.state === 'interrupted' && <p className={styles.answerStatus}><StopRegular aria-hidden />Geração interrompida. A resposta pode estar incompleta.</p>}
                     {!!message.sources?.length && <div className={styles.sources} aria-label="Fontes consultadas">{message.sources.map((source) => <SourceLink key={`${source.document_id}-${source.id}`} source={source} />)}</div>}

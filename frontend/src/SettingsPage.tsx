@@ -10,6 +10,7 @@ import {
   SearchRegular, SettingsRegular, SparkleRegular,
 } from '@fluentui/react-icons';
 import { errorMessage } from './api';
+import AppearanceMenu from './AppearanceMenu';
 import { formatBytes } from './storage';
 import {
   changedSettings, draftValues, numericFields, SettingsApiError, settingsApi, settingsGroups, toDraft, validateSettings,
@@ -19,10 +20,12 @@ import {
 const useSettingsStyles = makeStyles({
   page: { height: '100dvh', minHeight: '480px', display: 'flex', flexDirection: 'column', color: tokens.colorNeutralForeground1, backgroundColor: tokens.colorNeutralBackground2, fontFamily: tokens.fontFamilyBase },
   header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalL, padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalXXL}`, backgroundColor: tokens.colorNeutralBackground1, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, flexWrap: 'wrap', '@media (max-width: 600px)': { padding: tokens.spacingHorizontalM, gap: tokens.spacingHorizontalM } },
-  back: { minHeight: '44px' },
+  back: { minWidth: '44px', minHeight: '44px' },
+  backText: { '@media (max-width: 600px)': { display: 'none' } },
   title: { margin: 0, fontSize: tokens.fontSizeBase500, lineHeight: tokens.lineHeightBase500, fontWeight: tokens.fontWeightSemibold },
   headerBrand: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', '& svg': { color: tokens.colorBrandForeground1, fontSize: tokens.fontSizeBase500 } },
-  headerBadge: { marginLeft: 'auto', '@media (max-width: 600px)': { display: 'none' } },
+  headerActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  headerBadge: { '@media (max-width: 600px)': { display: 'none' } },
   scroll: { flex: 1, minHeight: 0, overflowY: 'auto', scrollbarGutter: 'stable' },
   container: { width: '100%', maxWidth: '1216px', margin: '0 auto', padding: tokens.spacingHorizontalXXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXL, '@media (max-width: 600px)': { padding: tokens.spacingHorizontalM, gap: tokens.spacingVerticalL } },
   intro: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, '& p': { margin: 0, color: tokens.colorNeutralForeground2, lineHeight: tokens.lineHeightBase400, maxWidth: '780px' } },
@@ -186,9 +189,9 @@ export default function SettingsPage({ onBack, onSaved }: { onBack: () => void; 
 
   return <div className={styles.page}>
     <header className={styles.header}>
-      <Button className={styles.back} icon={<ArrowLeftRegular />} appearance="subtle" disabled={saving} onClick={() => dirty ? openConfirm('leave') : onBack()}>Voltar ao chat</Button>
+      <Button className={styles.back} icon={<ArrowLeftRegular />} appearance="subtle" aria-label="Voltar ao chat" disabled={saving} onClick={() => dirty ? openConfirm('leave') : onBack()}><span className={styles.backText}>Voltar ao chat</span></Button>
       <div className={styles.headerBrand}><SettingsRegular aria-hidden /><h1 className={styles.title} tabIndex={-1} ref={headingRef}>Configurações</h1></div>
-      <Badge className={styles.headerBadge} appearance="tint" color="informative" icon={<PeopleRegular />}>Acesso compartilhado</Badge>
+      <div className={styles.headerActions}><Badge className={styles.headerBadge} appearance="tint" color="informative" icon={<PeopleRegular />}>Acesso compartilhado</Badge><AppearanceMenu /></div>
     </header>
     <main className={styles.scroll}>
       <div className={styles.container}>
@@ -228,7 +231,7 @@ export default function SettingsPage({ onBack, onSaved }: { onBack: () => void; 
       <div className={styles.footerActions}>
         <Button icon={<ArrowClockwiseRegular />} disabled={!snapshot || loading || saving} onClick={() => { setDraft(toDraft(snapshot!.defaults)); setServerErrors({}); setShowValidation(false); setNotice({ kind: 'info', title: 'Padrões carregados para revisão', message: 'Os valores ainda não foram aplicados. Revise e use Salvar alterações para confirmar.' }); }}>Restaurar padrões</Button>
         <Button icon={<ArrowUndoRegular />} disabled={!dirty || loading || saving} onClick={() => { setDraft(toDraft(snapshot!.values)); setServerErrors({}); setShowValidation(false); setNotice(null); }}>Desfazer</Button>
-        <Button form="settings-form" type="submit" appearance="primary" icon={saving ? <Spinner size="tiny" /> : <SaveRegular />} disabled={!dirty || loading || saving}>{saving ? 'Salvando…' : 'Salvar alterações'}</Button>
+        <Button form="settings-form" type="submit" appearance="primary" icon={saving ? <Spinner size="tiny" aria-hidden /> : <SaveRegular />} disabled={!dirty || loading || saving}>{saving ? 'Salvando…' : 'Salvar alterações'}</Button>
       </div>
     </div></footer>
     <Dialog open={confirm !== null} onOpenChange={(_, data) => { if (!data.open) closeConfirm(); }}>

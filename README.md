@@ -93,6 +93,12 @@ bash scripts/bootstrap.sh
 
 Uploads são limitados a 25 MB por arquivo, 200 documentos, 500 páginas por PDF e 2.000 trechos por documento por padrão. Esses limites podem ser ajustados na área **Configurações**. PDFs digitalizados sem camada de texto precisam passar por OCR antes do upload. Arquivos protegidos por senha ou sem texto utilizável são apresentados como erro. É possível tentar a ingestão novamente pela interface.
 
+## Aparência
+
+Use **Aparência** no cabeçalho para escolher **Claro**, **Escuro** ou **Sistema**. A opção Sistema acompanha o tema do sistema operacional e é o padrão inicial. A escolha é salva neste navegador e sincronizada entre abas da mesma aplicação.
+
+O tema abrange chat, biblioteca, configurações, diálogos e gráficos. Essa preferência é local ao navegador; os parâmetros do modelo continuam compartilhados globalmente.
+
 ## Configurações compartilhadas
 
 Abra **Configurações** no cabeçalho da aplicação. Todas as pessoas que acessam o Mini RAG podem consultar e alterar os ajustes; eles valem globalmente para a aplicação, sem login ou perfis de acesso.

@@ -5,6 +5,7 @@ import { AriaComponent, GridComponent, TooltipComponent } from 'echarts/componen
 import { SVGRenderer } from 'echarts/renderers';
 import { LabelLayout } from 'echarts/features';
 import { useLibraryStyles } from './libraryStyles';
+import { useAppearance } from './AppearanceProvider';
 
 use([BarChart, LineChart, AriaComponent, GridComponent, TooltipComponent, SVGRenderer, LabelLayout]);
 
@@ -15,6 +16,7 @@ export type ChartSpec =
 
 export default function LibraryChart({ spec, description }: { spec: ChartSpec; description: string }) {
   const styles = useLibraryStyles();
+  const { resolvedTheme } = useAppearance();
   const host = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!host.current) return;
@@ -63,6 +65,6 @@ export default function LibraryChart({ spec, description }: { spec: ChartSpec; d
     resize.observe(element);
     updateSize();
     return () => { disposed = true; resize.disconnect(); chart?.dispose(); };
-  }, [spec, description]);
+  }, [spec, description, resolvedTheme]);
   return <div ref={host} className={styles.chart} style={spec.kind === 'status' ? { height: 28 } : undefined} />;
 }

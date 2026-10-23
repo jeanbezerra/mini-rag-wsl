@@ -24,10 +24,13 @@ Use Node.js 22.12 ou superior. O Dockerfile usa Node.js 22 para compilar e Nginx
 - Modelos são listados por `/api/models`; a interface não baixa modelos. A indisponibilidade do Ollama permite editar os demais parâmetros. O chat e seu rascunho permanecem montados ao abrir as configurações.
 - Biblioteca avançada acima de Configurações no menu, com contextos Acervo, Indexação e Desempenho. A lista usa pesquisa, filtros, ordenação e paginação no servidor; o detalhe preserva os filtros ao voltar e permite consultar fragmentos, repetir uma falha, reindexar ou excluir com confirmação.
 - Métricas estruturais e de desempenho são obtidas por `/api/library`. Valores ausentes permanecem distintos de zero. Gráficos Apache ECharts 6.1.0 usam SVG e importações modulares, carregadas sob demanda ao abrir a área avançada; os valores também estão em tabelas HTML expansíveis. Não há nota de precisão semântica calculada a partir da estrutura dos fragmentos.
+- Aparência Claro/Escuro/Sistema nos cabeçalhos do chat, das configurações e da biblioteca. Preferência local em `mini-rag.appearance`, com atualização entre abas e acompanhamento do sistema quando selecionado. O provider mantém conversas e formulários montados durante a troca; gráficos ECharts repintam os tokens do tema atual.
 
 ## Fluent UI e validação
 
-`@fluentui/react-components` 9.74.11 e `@fluentui/react-icons` 2.0.344, com componentes estáveis, `FluentProvider`, tema claro de marca verde-petróleo, tokens semânticos e Griffel. `Dialog` e `Popover` preservam suas composições oficiais. `Field` associa o rótulo e a validação à pergunta. Os controles e o conteúdo estão em português do Brasil.
+`@fluentui/react-components` 9.74.11 e `@fluentui/react-icons` 2.0.344, com componentes estáveis, `FluentProvider`, temas claro e escuro de marca verde-petróleo, tokens semânticos e Griffel. `Dialog`, `Menu` e `Popover` preservam suas composições oficiais. `Field` associa o rótulo e a validação à pergunta. Os controles e o conteúdo estão em português do Brasil.
+
+`public/appearance-init.js` aplica a superfície inicial antes do bundle React, respeitando a política `script-src 'self'` existente. O atributo `data-appearance-storage-key` do HTML fornece a mesma chave ao bootstrap e ao provider. Testes verificam que as cores iniciais correspondem aos temas Fluent, inclusive quando o armazenamento está bloqueado. As cores literais da raiz/bootstrap são restritas a essa primeira pintura; componentes usam tokens semânticos.
 
 Os testes cobrem limites e recuperação do histórico, erros da API, cancelamento, fim inesperado do stream, divisão de caracteres UTF-8 entre pacotes, validação dos parâmetros, dependências entre contexto e resposta, sobreposição dos trechos e conflitos de revisão. O build inclui verificação estrita de tipos. A documentação de design foi consultada no catálogo oficial Fluent 2 e a API foi conferida nos tipos instalados.
 

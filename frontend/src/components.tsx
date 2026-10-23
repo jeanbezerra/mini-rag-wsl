@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Badge, Button, Checkbox, Dialog, DialogActions, DialogBody, DialogContent,
   DialogSurface, DialogTitle, DialogTrigger, ProgressBar, Spinner,
@@ -12,6 +12,23 @@ import type { RagDocument, Source } from './types';
 const labels: Record<RagDocument['status'], string> = {
   queued: 'Na fila', processing: 'Indexando', ready: 'Pronto', error: 'Falha na ingestão',
 };
+
+export function CodeBlock({ children }: { children: ReactNode }) {
+  const host = useRef<HTMLPreElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  const measure = useCallback(() => {
+    const element = host.current;
+    setOverflowing(!!element && element.clientWidth > 0 && element.scrollWidth > element.clientWidth);
+  }, []);
+  useLayoutEffect(measure, [children, measure]);
+  useEffect(() => {
+    if (!host.current) return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(host.current);
+    return () => observer.disconnect();
+  }, [measure]);
+  return <pre ref={host} tabIndex={overflowing ? 0 : undefined} role={overflowing ? 'region' : undefined} aria-label={overflowing ? 'Bloco de código' : undefined}>{children}</pre>;
+}
 
 export function DocumentCard({ document, selected, disabled, onSelect, onChange }: {
   document: RagDocument; selected: boolean; disabled: boolean;
@@ -54,14 +71,14 @@ export function DocumentCard({ document, selected, disabled, onSelect, onChange 
             </DialogContent>
             <DialogActions>
               <DialogTrigger disableButtonEnhancement><Button disabled={busy}>Cancelar</Button></DialogTrigger>
-              <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <DeleteRegular />} onClick={() => { void remove(); }} disabled={busy}>{busy ? 'Excluindo' : 'Excluir documento'}</Button>
+              <Button appearance="primary" icon={busy ? <Spinner size="tiny" aria-hidden /> : <DeleteRegular />} onClick={() => { void remove(); }} disabled={busy}>{busy ? 'Excluindo' : 'Excluir documento'}</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
       </Dialog>
     </div>
     <div className={styles.documentBottom}>
-      <Badge appearance="tint" color={document.status === 'ready' ? 'success' : document.status === 'error' ? 'danger' : 'informative'} icon={['queued', 'processing'].includes(document.status) ? <Spinner size="extra-tiny" /> : undefined}>{labels[document.status]}</Badge>
+      <Badge appearance="tint" color={document.status === 'ready' ? 'success' : document.status === 'error' ? 'danger' : 'informative'} icon={['queued', 'processing'].includes(document.status) ? <Spinner size="extra-tiny" aria-hidden /> : undefined}>{labels[document.status]}</Badge>
       {document.status === 'ready' && <Checkbox label="Usar no chat" checked={selected} disabled={disabled} onChange={(_, data) => onSelect(data.checked === true)} />}
       {document.status === 'error' && <Button size="small" appearance="subtle" icon={<ArrowClockwiseRegular />} onClick={() => { void retry(); }} disabled={busy || disabled}>Tentar novamente</Button>}
     </div>
