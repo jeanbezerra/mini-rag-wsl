@@ -3,9 +3,9 @@ import asyncio
 import anyio
 
 
-async def native_call(function, *args):
-    """Keep the caller's CPU lock held until a non-cancellable native thread has finished."""
-    task = asyncio.create_task(asyncio.to_thread(function, *args))
+async def complete_before_cancel(operation):
+    """Keep the caller's lock until a native operation or commit has finished."""
+    task = asyncio.create_task(operation)
     try:
         return await asyncio.shield(task)
     except asyncio.CancelledError:
@@ -17,3 +17,8 @@ async def native_call(function, *args):
             except Exception:
                 pass
         raise
+
+
+async def native_call(function, *args):
+    """Keep the caller's CPU lock held until a non-cancellable native thread has finished."""
+    return await complete_before_cancel(asyncio.to_thread(function, *args))

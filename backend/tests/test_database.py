@@ -11,6 +11,7 @@ from rag.config import Settings
 from rag.db import Database
 from rag.embedding import vector_literal
 from rag.migrate import migrate
+from rag.runtime import Runtime
 
 APP_URL = os.getenv("TEST_DATABASE_URL")
 MIGRATION_URL = os.getenv("TEST_MIGRATION_DATABASE_URL")
@@ -107,3 +108,61 @@ async def test_second_worker_rejected():
     finally:
         await first.close()
         await second.close()
+
+
+async def test_runtime_settings_cas_restart_and_minimal_permissions(tmp_path):
+    db = Database(Settings(database_url=APP_URL))
+    await db.open()
+    original = await db.load_runtime_settings()
+    values = Settings().public().model_dump()
+    try:
+        first = await db.save_runtime_settings(
+            original["revision"], {**values, "max_pdf_pages": 1750, "temperature": 0.4}
+        )
+        assert first["revision"] == original["revision"] + 1 and first["updated_at"]
+        # Two simultaneous browsers holding the same revision: exactly one wins.
+        competing = await asyncio.gather(
+            *(
+                db.save_runtime_settings(
+                    first["revision"], {**first["values"], "temperature": temperature}
+                )
+                for temperature in (0.6, 0.8)
+            )
+        )
+        assert sum(row is not None for row in competing) == 1
+        winner = next(row for row in competing if row is not None)
+        assert await db.load_runtime_settings() == winner
+        async with db.pool.connection() as conn:
+            for command in (
+                "INSERT INTO rag.runtime_settings (singleton) VALUES (true)",
+                "DELETE FROM rag.runtime_settings WHERE singleton=true",
+                "UPDATE rag.runtime_settings SET singleton=false WHERE singleton=true",
+            ):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    async with conn.transaction():
+                        await conn.execute(command)
+        await db.close()
+        # A new application process restores the database values over environment
+        # defaults before spawning the ingestion worker, without changing the index.
+        runtime = Runtime(Settings(database_url=APP_URL, data_dir=tmp_path, temperature=0.1))
+
+        async def no_worker():
+            return None
+
+        runtime.worker = no_worker
+        try:
+            await runtime.start()
+            assert runtime.settings.max_pdf_pages == 1750
+            assert runtime.settings.temperature == winner["values"]["temperature"]
+            assert runtime.defaults.temperature == 0.1
+            assert runtime.revision == winner["revision"]
+        finally:
+            await runtime.close()
+    finally:
+        # The disposable test database remains usable by following integration tests.
+        await db.close()
+        db = Database(Settings(database_url=APP_URL))
+        await db.open()
+        current = await db.load_runtime_settings()
+        await db.save_runtime_settings(current["revision"], original["values"])
+        await db.close()

@@ -91,7 +91,26 @@ bash scripts/bootstrap.sh
 4. Abra as fontes da resposta para conferir o trecho e, em PDFs, a página. Você pode restringir a busca aos documentos selecionados.
 5. Use uma nova conversa para mudar de assunto. Conversas ficam no armazenamento local do navegador; documentos e vetores ficam no servidor local.
 
-Uploads são limitados a 25 MB por arquivo, 200 documentos e 2.000 trechos por documento por padrão. PDFs digitalizados sem camada de texto precisam passar por OCR antes do upload. Arquivos protegidos por senha ou sem texto utilizável são apresentados como erro. É possível tentar a ingestão novamente pela interface.
+Uploads são limitados a 25 MB por arquivo, 200 documentos, 500 páginas por PDF e 2.000 trechos por documento por padrão. Esses limites podem ser ajustados na área **Configurações**. PDFs digitalizados sem camada de texto precisam passar por OCR antes do upload. Arquivos protegidos por senha ou sem texto utilizável são apresentados como erro. É possível tentar a ingestão novamente pela interface.
+
+## Configurações compartilhadas
+
+Abra **Configurações** no cabeçalho da aplicação. Todas as pessoas que acessam o Mini RAG podem consultar e alterar os ajustes; eles valem globalmente para a aplicação, sem login ou perfis de acesso.
+
+| Objetivo | Ajustes disponíveis |
+| --- | --- |
+| Modelo e respostas | Modelo local, criatividade (temperatura), top-p, penalidade de repetição e limite da resposta |
+| Velocidade e memória | Threads de CPU, janela de contexto, lote de geração, permanência do modelo na RAM e tempo máximo de resposta |
+| Busca nos documentos | Quantidade de trechos recuperados e similaridade mínima |
+| Ingestão e limites | Tamanho/sobreposição dos fragmentos, lote de embeddings, tamanho dos uploads, quantidade de documentos, páginas de PDF, texto extraído, DOCX descompactado e trechos por documento |
+
+Cada campo explica o efeito do ajuste e seus limites. **Salvar alterações** valida e persiste a configuração no PostgreSQL. **Restaurar padrões** preenche o formulário com os valores iniciais do ambiente; use Salvar para aplicá-los. Você pode desfazer a edição antes de salvar.
+
+Os ajustes de geração e busca passam a valer nas próximas perguntas. Limites e fragmentação afetam novas ingestões e novas tentativas de documentos com erro; documentos já indexados mantêm seus trechos. O modelo de embeddings permanece fixo para preservar a compatibilidade dos vetores existentes.
+
+A configuração salva sobrevive ao reinício da aplicação e prevalece sobre os valores iniciais do `.env`. As credenciais do banco e os endereços internos dos serviços continuam fora dessa tela. Se houver resposta ou ingestão em andamento, aguarde a conclusão para salvar. Se outra pessoa salvar uma configuração enquanto você edita, a aplicação informa o conflito e mantém sua edição para você decidir se deseja recarregar.
+
+A seleção do modelo usa os modelos já baixados no Ollama local. Para disponibilizar outro modelo, baixe-o pelo terminal e atualize a lista na tela de configurações. O endpoint de configurações não dispara downloads.
 
 ## Modelos e otimização de CPU
 
@@ -104,21 +123,15 @@ Uploads são limitados a 25 MB por arquivo, 200 documentos e 2.000 trechos por d
 
 O backend força `num_gpu=0` e `think=false`, mantém um único fluxo de geração, limita contexto/resposta e reutiliza o modelo em memória. O Compose não passa dispositivos GPU ao Ollama. Embeddings usam ONNX Runtime CPU, lotes pequenos e threads limitadas. Os trechos respeitam o tokenizador real e o limite curto do modelo de embeddings, evitando indexar somente o começo de blocos longos.
 
-Como ponto de partida, reserve **8 GB de RAM para o WSL e 4 CPUs**; o consumo e a velocidade dependem do hardware e do tamanho dos documentos. Essa é uma orientação inicial, não um benchmark. Ajuste `CPU_THREADS` no `.env`; mais threads nem sempre melhoram a latência. Durante ingestão há disputa de CPU com o chat.
+Como ponto de partida, reserve **8 GB de RAM para o WSL e 4 CPUs**; o consumo e a velocidade dependem do hardware e do tamanho dos documentos. Essa é uma orientação inicial, não um benchmark. Ajuste as threads na área **Configurações**; mais threads nem sempre melhoram a latência. `CPU_THREADS` no `.env` define o valor inicial. Ingestão e chat compartilham o orçamento de CPU.
 
 Para reduzir memória e latência, com perda de qualidade nas respostas:
 
-```dotenv
-# .env
-OLLAMA_MODEL=qwen3:0.6b-q4_K_M
-CPU_THREADS=4
-```
-
 ```bash
-docker compose up -d --force-recreate model-init api
+docker compose exec ollama ollama pull qwen3:0.6b-q4_K_M
 ```
 
-O serviço `model-init` baixa o modelo configurado. Aguarde sua conclusão. O modelo anterior continua no cache e pode ser removido manualmente com `docker compose exec ollama ollama rm NOME_DO_MODELO` quando não estiver em uso.
+Depois, abra **Configurações → Modelo e respostas**, atualize a lista de modelos, selecione `qwen3:0.6b-q4_K_M` e salve. `OLLAMA_MODEL` no `.env` define o modelo inicial e o download do serviço `model-init`; uma configuração já salva no banco prevalece sobre essa variável. O modelo anterior continua no cache e pode ser removido manualmente com `docker compose exec ollama ollama rm NOME_DO_MODELO` quando não estiver em uso.
 
 Se necessário, configure a memória global do WSL em `%UserProfile%\.wslconfig` no Windows, conforme os [recursos oficiais do WSL](https://learn.microsoft.com/windows/wsl/wsl-config). Depois de salvar, `wsl --shutdown` aplica a mudança e encerra **todas** as distribuições WSL abertas.
 
@@ -157,11 +170,13 @@ flowchart LR
 
 **Não use `docker compose down -v` para parar a aplicação:** essa opção remove os volumes e seus dados. Preserve o `.env`; mudar apenas as senhas nele não altera roles de um banco já inicializado. Scripts em `database/init` executam somente no primeiro início de um volume vazio. Atualizações de schema usam o job `migrate`.
 
+As configurações globais também ficam no PostgreSQL e entram no backup do banco. Para atualizar uma instalação existente com esta versão, execute `docker compose up --build -d`; o job de migração cria a tabela de configurações antes da API iniciar, preservando documentos e vetores.
+
 ## Segurança e limites de uso
 
 A única porta publicada é `127.0.0.1:8080`; PostgreSQL e Ollama ficam na rede interna do Compose. A API usa `rag_app`, sem superuser ou DDL; a role de migração tem credenciais separadas e não é disponibilizada à API. Consultas são parametrizadas e a API roda como usuário sem privilégios. O banco mantém checksums, WAL e durabilidade padrão.
 
-Esta é uma aplicação **pessoal local, sem autenticação e sem isolamento entre usuários**. Quem acessar a interface tem acesso à biblioteca. Se precisar de acesso por rede, acrescente autenticação e TLS antes de mudar a publicação da porta. Documentos são dados não confiáveis no prompt; um modelo pequeno ainda pode errar ou seguir instruções contidas nos documentos. Confira as fontes.
+Esta é uma aplicação **de acesso compartilhado, sem autenticação ou contas de usuário**. Quem acessar a interface pode usar a biblioteca, conversar e alterar as configurações globais. A publicação padrão permanece em localhost; o alcance do acesso depende da configuração de rede do host. Documentos são dados não confiáveis no prompt; um modelo pequeno ainda pode errar ou seguir instruções contidas nos documentos. Confira as fontes.
 
 O primeiro build e os downloads de modelos precisam de internet. Depois que as imagens e os dois modelos estiverem no cache, as respostas são processadas localmente. Os documentos e o histórico do chat não são enviados para APIs de IA externas.
 

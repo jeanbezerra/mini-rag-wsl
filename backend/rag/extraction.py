@@ -28,16 +28,32 @@ def normalize(text: str) -> str:
     return re.sub(r"[ \t]+", " ", text).strip()
 
 
-def extract_pages(path: Path, extension: str) -> list[Page]:
+def extract_pages(
+    path: Path,
+    extension: str,
+    *,
+    max_pdf_pages: int | None = None,
+    max_text_characters: int | None = None,
+    max_docx_uncompressed_mb: int | None = None,
+) -> list[Page]:
     pages: list[Page] = []
     total = 0
+    text_limit = max_text_characters if max_text_characters is not None else MAX_TEXT_CHARACTERS
+    page_limit = max_pdf_pages if max_pdf_pages is not None else MAX_PAGES
+    docx_limit = (
+        max_docx_uncompressed_mb * 1024 * 1024
+        if max_docx_uncompressed_mb is not None
+        else MAX_DOCX_UNCOMPRESSED
+    )
 
     def append(text: str, number: int | None = None) -> None:
         nonlocal total
         text = normalize(text)
         total += len(text)
-        if total > MAX_TEXT_CHARACTERS:
-            raise ExtractionError("Texto excede 2 milhões de caracteres. Divida o documento.")
+        if total > text_limit:
+            raise ExtractionError(
+                f"Texto excede {text_limit:,} caracteres. Divida o documento ou ajuste o limite."
+            )
         if text:
             pages.append(Page(text, number))
 
@@ -46,14 +62,18 @@ def extract_pages(path: Path, extension: str) -> list[Page]:
             reader = PdfReader(path)
             if reader.is_encrypted and not reader.decrypt(""):
                 raise ExtractionError("PDF protegido por senha. Envie uma cópia sem proteção.")
-            if len(reader.pages) > MAX_PAGES:
-                raise ExtractionError("PDF excede 500 páginas. Divida o documento.")
+            if len(reader.pages) > page_limit:
+                raise ExtractionError(
+                    f"PDF excede {page_limit} páginas. Divida o documento ou ajuste o limite."
+                )
             for index, page in enumerate(reader.pages, 1):
                 append(page.extract_text() or "", index)
         elif extension == ".docx":
             with ZipFile(path) as archive:
-                if sum(item.file_size for item in archive.infolist()) > MAX_DOCX_UNCOMPRESSED:
-                    raise ExtractionError("DOCX descompactado excede 50 MB.")
+                if sum(item.file_size for item in archive.infolist()) > docx_limit:
+                    raise ExtractionError(
+                        f"DOCX descompactado excede {max_docx_uncompressed_mb or 50} MB."
+                    )
             document = Document(path)
             # DOCX has no stable page numbers; include paragraphs and table cell text.
             for block in document.iter_inner_content():

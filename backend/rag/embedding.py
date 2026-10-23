@@ -42,10 +42,16 @@ class Embedder:
 
     def documents(self, pages: list[Page]) -> list[dict]:
         chunks = token_chunks(
-            pages, self.tokenizer, max_chunks=self.settings.max_chunks_per_document
+            pages,
+            self.tokenizer,
+            size=self.settings.chunk_tokens,
+            overlap=self.settings.chunk_overlap,
+            max_chunks=self.settings.max_chunks_per_document,
         )
         # MiniLM is symmetric: no query:/passage: prefixes. Batch small to bound CPU RAM.
-        vectors = self.model.embed([chunk["content"] for chunk in chunks], batch_size=16)
+        vectors = self.model.embed(
+            [chunk["content"] for chunk in chunks], batch_size=self.settings.embedding_batch_size
+        )
         for chunk, vector in zip(chunks, vectors, strict=True):
             chunk["embedding"] = vector_literal(vector)
         return chunks

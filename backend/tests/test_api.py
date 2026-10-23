@@ -163,3 +163,22 @@ def test_chat_upstream_failure_becomes_error_event(client):
 def test_retry_missing_or_non_error_document(client):
     session, _, _ = client
     assert session.post(f"/api/documents/{uuid4()}/retry").status_code == 409
+
+
+def test_chat_document_selection_matches_configurable_library_capacity(client):
+    session, state, _ = client
+    document_ids = [str(uuid4()) for _ in range(201)]
+    response = session.post(
+        "/api/chat", json={"message": "O que dizem os documentos?", "document_ids": document_ids}
+    )
+    assert response.status_code == 200
+    assert json.loads(response.text.splitlines()[-1])["reason"] == "no_sources"
+    searched_ids = state.db.search.call_args.args[2]
+    assert [str(document_id) for document_id in searched_ids] == document_ids
+    too_many = [str(uuid4()) for _ in range(10001)]
+    invalid = session.post(
+        "/api/chat", json={"message": "Quais documentos?", "document_ids": too_many}
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"][0]["loc"] == ["body", "document_ids"]
+    assert state.db.search.call_count == 1

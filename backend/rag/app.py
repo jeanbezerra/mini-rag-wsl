@@ -9,16 +9,17 @@ from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
+import httpx
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from psycopg.errors import UniqueViolation
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from rag.concurrency import native_call
-from rag.config import Settings
+from rag.config import PublicSettings, Settings
 from rag.llm import build_prompt
-from rag.runtime import Runtime
+from rag.runtime import InvalidModel, Runtime, RuntimeBusy, SettingsConflict
 
 logger = logging.getLogger(__name__)
 SUPPORTED = {".pdf", ".txt", ".md", ".docx"}
@@ -32,7 +33,7 @@ class HistoryMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     history: list[HistoryMessage] = Field(default_factory=list, max_length=20)
-    document_ids: list[UUID] | None = Field(default=None, max_length=200)
+    document_ids: list[UUID] | None = Field(default=None, max_length=10000)
 
     @field_validator("message")
     @classmethod
@@ -42,6 +43,22 @@ class ChatRequest(BaseModel):
         if len(value.encode("utf-8")) > 1500:
             raise ValueError("Pergunta muito longa; limite de 1500 bytes UTF-8.")
         return value.strip()
+
+
+class SettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    revision: int = Field(ge=0)
+    values: PublicSettings
+
+    @field_validator("values", mode="before")
+    @classmethod
+    def complete_values(cls, value):
+        if isinstance(value, dict):
+            missing = PublicSettings.model_fields.keys() - value.keys()
+            if missing:
+                raise ValueError("Envie todas as configurações: " + ", ".join(sorted(missing)))
+        return value
 
 
 def event(data: dict) -> str:
@@ -56,6 +73,8 @@ def safe_filename(name: str | None) -> str:
 def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
     settings = settings or Settings()
     state = runtime or Runtime(settings)
+    if not hasattr(state, "settings"):
+        state.settings = settings
 
     @asynccontextmanager
     async def lifespan(app):
@@ -73,7 +92,10 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
         # Bound the entire multipart request before Starlette spools it. Route-level
         # streaming alone is too late: multipart parsing happens before the endpoint.
         if request.method == "POST" and request.url.path == "/api/documents":
-            limit = settings.max_upload_mb * 1024 * 1024 + 64 * 1024
+            # The middleware and endpoint use one snapshot even if another browser
+            # saves settings during multipart parsing or upload streaming.
+            request.state.upload_settings = state.settings
+            limit = state.settings.max_upload_mb * 1024 * 1024 + 64 * 1024
             content_length = request.headers.get("content-length")
             if content_length:
                 try:
@@ -98,6 +120,7 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
 
     @app.get("/api/health")
     async def health():
+        active = state.settings
         try:
             database = await asyncio.wait_for(state.db.health(), timeout=3)
         except Exception:
@@ -109,23 +132,68 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
             "model": model,
             "embedding": {
                 "status": state.embedder.status,
-                "name": settings.embedding_model,
+                "name": active.embedding_model,
                 "error": state.embedder.error,
             },
             "worker": {"status": "error" if state.worker_error else "ok"},
             "limits": {
-                "max_upload_mb": settings.max_upload_mb,
-                "max_documents": settings.max_documents,
+                "max_upload_mb": active.max_upload_mb,
+                "max_documents": active.max_documents,
+                "max_pdf_pages": active.max_pdf_pages,
+                "max_text_characters": active.max_text_characters,
+                "max_docx_uncompressed_mb": active.max_docx_uncompressed_mb,
+                "max_chunks_per_document": active.max_chunks_per_document,
             },
-            "cpu_threads": settings.cpu_threads,
+            "cpu_threads": active.cpu_threads,
         }
+
+    @app.get("/api/settings")
+    async def get_settings():
+        return state.settings_response()
+
+    @app.put("/api/settings")
+    async def update_settings(body: SettingsUpdate):
+        try:
+            return await state.update_settings(body.revision, body.values)
+        except SettingsConflict as exc:
+            raise HTTPException(409, {"code": "settings_conflict", "message": str(exc)}) from exc
+        except RuntimeBusy as exc:
+            raise HTTPException(409, {"code": "runtime_busy", "message": str(exc)}) from exc
+        except InvalidModel as exc:
+            raise HTTPException(
+                422,
+                [
+                    {
+                        "loc": ["body", "values", "ollama_model"],
+                        "msg": str(exc),
+                        "type": "value_error",
+                    }
+                ],
+            ) from exc
+        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            raise HTTPException(
+                503, "Não foi possível validar o modelo no Ollama. Tente novamente."
+            ) from exc
+        except Exception as exc:
+            logger.exception("Failed to update global settings")
+            raise HTTPException(
+                503, "Não foi possível salvar. A configuração anterior foi preservada."
+            ) from exc
+
+    @app.get("/api/models")
+    async def models():
+        try:
+            return {"models": await state.llm.models()}
+        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+            raise HTTPException(503, "O Ollama local está indisponível. Tente novamente.") from exc
 
     @app.get("/api/documents")
     async def documents():
         return {"documents": await state.db.list_documents()}
 
     @app.post("/api/documents", status_code=201)
-    async def upload(file: Annotated[UploadFile, File()]):
+    async def upload(request: Request, file: Annotated[UploadFile, File()]):
+        active = request.state.upload_settings
         name = safe_filename(file.filename)
         extension = Path(name).suffix.lower()
         if extension not in SUPPORTED:
@@ -139,9 +207,9 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
             with temporary.open("xb") as target:
                 while chunk := await file.read(1024 * 1024):
                     size += len(chunk)
-                    if size > settings.max_upload_mb * 1024 * 1024:
+                    if size > active.max_upload_mb * 1024 * 1024:
                         raise HTTPException(
-                            413, f"Limite de {settings.max_upload_mb} MB por arquivo."
+                            413, f"Limite de {active.max_upload_mb} MB por arquivo."
                         )
                     digest.update(chunk)
                     await native_call(target.write, chunk)
@@ -196,14 +264,17 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
             try:
                 # Cancellation of the response closes Ollama's HTTP stream and frees the lock.
                 async with state.inference_lock:
+                    active = state.settings
                     embedding = await native_call(state.embedder.query, body.message)
                     sources = await state.db.search(
-                        body.message, embedding, body.document_ids, settings.retrieval_top_k
+                        body.message, embedding, body.document_ids, active.retrieval_top_k
                     )
                     messages, sources = build_prompt(
                         body.message,
                         [item.model_dump() for item in body.history],
                         sources,
+                        context_tokens=active.context_tokens,
+                        max_output_tokens=active.max_output_tokens,
                     )
                     yield event({"type": "sources", "sources": sources})
                     if not sources:
@@ -219,7 +290,7 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
                         )
                         yield event({"type": "done", "reason": "no_sources"})
                         return
-                    async with asyncio.timeout(settings.generation_timeout_seconds):
+                    async with asyncio.timeout(active.generation_timeout_seconds):
                         async for chunk in state.llm.stream(messages):
                             if await request.is_disconnected():
                                 return

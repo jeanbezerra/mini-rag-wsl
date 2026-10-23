@@ -78,3 +78,27 @@ def test_vector_rejects_invalid_dimensions_and_nan():
     with pytest.raises(ValueError):
         vector_literal([float("nan")] * 384)
     assert vector_literal([0.0] * 384).startswith("[0,0,")
+
+
+def test_configured_extraction_limits_and_chunk_overlap(tmp_path, tokenizer, monkeypatch):
+    from types import SimpleNamespace
+
+    path = tmp_path / "doc"
+    path.write_text("a" * 101)
+    with pytest.raises(ExtractionError, match="100 caracteres"):
+        extract_pages(path, ".txt", max_text_characters=100)
+    assert len(extract_pages(path, ".txt", max_text_characters=200)[0].text) == 101
+    monkeypatch.setattr(
+        "rag.extraction.PdfReader",
+        lambda _: SimpleNamespace(
+            is_encrypted=False,
+            pages=[SimpleNamespace(extract_text=lambda: "texto")] * 2,
+        ),
+    )
+    with pytest.raises(ExtractionError, match="1 páginas"):
+        extract_pages(path, ".pdf", max_pdf_pages=1)
+    assert len(extract_pages(path, ".pdf", max_pdf_pages=2)) == 2
+    text = " ".join(f"palavra{i}" for i in range(100))
+    chunks = token_chunks([Page(text)], tokenizer, size=40, overlap=5)
+    assert "palavra35" in chunks[0]["content"] and "palavra35" in chunks[1]["content"]
+    assert all(len(tokenizer.encode(chunk["content"]).ids) <= 42 for chunk in chunks)

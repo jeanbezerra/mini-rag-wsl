@@ -3,6 +3,7 @@ from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from rag.config import Settings
@@ -72,6 +73,31 @@ class Database:
         async with self.pool.connection() as conn:
             row = await (await conn.execute("SHOW server_version")).fetchone()
             return {"status": "ok", "version": row["server_version"]}
+
+    async def load_runtime_settings(self) -> dict:
+        async with self.pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT config_values AS values, revision, updated_at "
+                    "FROM rag.runtime_settings "
+                    "WHERE singleton=true"
+                )
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("Configurações ausentes. Execute a migração do banco.")
+            return row
+
+    async def save_runtime_settings(self, revision: int, values: dict) -> dict | None:
+        # Compare-and-set is atomic. No stale browser can overwrite a newer revision.
+        async with self.pool.connection() as conn:
+            return await (
+                await conn.execute(
+                    "UPDATE rag.runtime_settings SET config_values=%s, revision=revision+1, "
+                    "updated_at=now() WHERE singleton=true AND revision=%s "
+                    "RETURNING config_values AS values, revision, updated_at",
+                    (Jsonb(values), revision),
+                )
+            ).fetchone()
 
     async def list_documents(self) -> list[dict]:
         async with self.pool.connection() as conn:

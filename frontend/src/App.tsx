@@ -8,11 +8,12 @@ import {
   AddRegular, ArrowClockwiseRegular, ArrowUploadRegular, ChatRegular, CheckmarkCircleRegular,
   ChevronRightRegular, DatabaseRegular, DeleteRegular, DismissRegular, DocumentAddRegular,
   DocumentSearchRegular, FolderOpenRegular, LeafOneRegular, LockClosedRegular, NavigationRegular,
-  PersonRegular, SendRegular, ServerRegular, SparkleRegular, StopRegular,
+  PersonRegular, SendRegular, ServerRegular, SettingsRegular, SparkleRegular, StopRegular,
 } from '@fluentui/react-icons';
 import Markdown from 'react-markdown';
 import { api, errorMessage, sendChat, uploadDocument } from './api';
 import { DocumentCard, SourceLink } from './components';
+import SettingsPage from './SettingsPage';
 import { loadConversations, newConversation, STORAGE_KEY } from './storage';
 import { useStyles } from './styles';
 import type { Conversation, Health, Message, RagDocument } from './types';
@@ -35,6 +36,7 @@ export default function App() {
   const [selectionExplicit, setSelectionExplicit] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(() => window.matchMedia('(min-width: 1001px)').matches);
   const [navigationOpen, setNavigationOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [generating, setGenerating] = useState(false);
   const [chatStatus, setChatStatus] = useState('');
@@ -44,6 +46,7 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const libraryToggleRef = useRef<HTMLButtonElement>(null);
+  const settingsToggleRef = useRef<HTMLButtonElement>(null);
   const libraryHeadingRef = useRef<HTMLHeadingElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -203,7 +206,9 @@ export default function App() {
     <div className={styles.libraryFootnote}><LockClosedRegular aria-hidden /><span>Arquivos e índice ficam no seu ambiente local.</span></div>
   </aside>;
 
-  return <div className={styles.app}>
+  const openSettings = () => { setNavigationOpen(false); setSettingsOpen(true); };
+
+  return <><div className={styles.app} style={settingsOpen ? { display: 'none' } : undefined}>
     <a href="#main-chat" className={styles.skipLink}>Pular para a conversa</a>
     <nav className={mergeClasses(styles.sidebar, navigationOpen && styles.sidebarOpen)} aria-label="Conversas">
       <div className={styles.brand}><div className={styles.brandIcon}><DocumentSearchRegular aria-hidden /></div><div><div className={styles.brandName}>Mini RAG</div><span className={styles.small}>Seu conhecimento, por perto.</span></div></div>
@@ -222,6 +227,7 @@ export default function App() {
           </Dialog>
         </div>)}
       </div>
+      <Button icon={<SettingsRegular />} appearance="subtle" onClick={openSettings}>Configurações</Button>
       <div className={styles.localCard}><LeafOneRegular aria-hidden /><div><p><strong>Pequeno por escolha.</strong></p><p className={styles.small}>Modelo aberto, execução em CPU e documentos no seu WSL.</p></div></div>
     </nav>
     <div className={styles.workspace}>
@@ -231,6 +237,7 @@ export default function App() {
           <div className={styles.headerTitle}><h1 className={styles.heading}>Converse com seus documentos</h1><span className={mergeClasses(styles.small, styles.desktopText)}>Respostas com contexto. Fontes para conferir.</span></div>
         </div>
         <div className={styles.headerActions}>
+          <Button ref={settingsToggleRef} icon={<SettingsRegular />} appearance="subtle" aria-label="Configurações" onClick={openSettings}><span className={styles.desktopText}>Configurações</span></Button>
           <Popover positioning="below-end">
             <PopoverTrigger disableButtonEnhancement><Button size="small" appearance="subtle" icon={<ServerRegular />} aria-label="Ver status do ambiente local"><Badge appearance="tint" color={modelReady ? 'success' : healthError ? 'danger' : 'warning'}>{modelReady ? 'CPU · pronto' : healthError ? 'Offline' : !health ? 'Conectando' : 'Preparando'}</Badge></Button></PopoverTrigger>
             <PopoverSurface><div className={styles.healthGrid}><strong>Ambiente local</strong><div className={styles.healthRow}><DatabaseRegular aria-hidden /><div><p>PostgreSQL · {health?.database.status || 'sem conexão'}</p><code>{health?.database.version}</code></div></div><div className={styles.healthRow}><ServerRegular aria-hidden /><div><p>Modelo · {health?.model.status || 'desconhecido'}</p><code>{health?.model.name || 'Aguardando o servidor'}</code></div></div><div className={styles.healthRow}><DocumentSearchRegular aria-hidden /><div><p>Embeddings · {health?.embedding.status || 'desconhecido'}</p><code>{health?.embedding.name || 'Aguardando o servidor'}</code></div></div><Button icon={<ArrowClockwiseRegular />} onClick={() => { void refreshHealth(); }}>Verificar conexão</Button></div></PopoverSurface>
@@ -286,5 +293,5 @@ export default function App() {
         {libraryOpen && library}
       </div>
     </div>
-  </div>;
+  </div>{settingsOpen && <SettingsPage onBack={() => { setSettingsOpen(false); requestAnimationFrame(() => settingsToggleRef.current?.focus()); }} onSaved={() => { void refreshHealth(); }} />}</>;
 }
