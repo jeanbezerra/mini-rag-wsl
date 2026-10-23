@@ -1,7 +1,10 @@
 import asyncio
 import logging
+from datetime import UTC, datetime
+from time import perf_counter
 from uuid import UUID, uuid4
 
+from rag.analytics import measure_chunks
 from rag.concurrency import complete_before_cancel, native_call
 from rag.config import PublicSettings, Settings
 from rag.db import Database
@@ -147,8 +150,22 @@ class Runtime:
                     continue
                 try:
                     async with self.inference_lock:
-                        chunks = await native_call(self.ingest, document)
-                        await self.db.finish(document["id"], chunks)
+                        started = perf_counter()
+                        measurements = {}
+                        snapshot = {
+                            **self.settings.public().model_dump(),
+                            "embedding_model": self.settings.embedding_model,
+                        }
+                        chunks = await native_call(self.ingest, document, measurements)
+                        measurements["finished_at"] = datetime.now(UTC).isoformat()
+                        measurements["settings"] = snapshot
+                        measurements["duration_ms"] = round((perf_counter() - started) * 1000, 3)
+                        saved = await self.db.finish(document["id"], chunks, measurements, started)
+                        duration = round((perf_counter() - started) * 1000, 3)
+                    if saved:
+                        await self.record_ingestion(
+                            document, snapshot, measurements, duration, True
+                        )
                 except Exception as exc:
                     logger.exception("Document ingestion failed: %s", document["id"])
                     error = (
@@ -160,6 +177,13 @@ class Runtime:
                         )
                     )
                     await self.db.fail_document(document["id"], error)
+                    await self.record_ingestion(
+                        document,
+                        snapshot,
+                        measurements,
+                        round((perf_counter() - started) * 1000, 3),
+                        False,
+                    )
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -167,16 +191,49 @@ class Runtime:
                 logger.exception("Ingestion worker temporarily unavailable")
                 await asyncio.sleep(5)
 
-    def ingest(self, document: dict) -> list[dict]:
+    async def record_ingestion(
+        self, document: dict, snapshot: dict, measurements: dict, duration: float, success: bool
+    ) -> None:
+        # Optional diagnostics must never change a successful document into an error.
+        try:
+            async with asyncio.timeout(2):
+                chunks = sum(measurements.get("token_counts", [])) if success else None
+                await self.db.record_ingestion_metrics(
+                    {
+                        "id": uuid4(),
+                        "document_id": document["id"],
+                        "document_name": document["name"],
+                        "outcome": "completed" if success else "error",
+                        "duration_ms": duration,
+                        "extraction_ms": measurements.get("extraction_ms"),
+                        "embedding_ms": measurements.get("embedding_ms"),
+                        "chunks": chunks,
+                        "chunks_per_second": round(chunks / (duration / 1000), 3)
+                        if chunks is not None and duration > 0
+                        else None,
+                        "settings": snapshot,
+                    }
+                )
+        except Exception:
+            logger.warning("Ingestion measurements could not be persisted")
+
+    def ingest(self, document: dict, measurements: dict | None = None) -> list[dict]:
+        measurements = measurements if measurements is not None else {}
         path = self.settings.uploads_dir / str(document["id"])
-        pages = extract_pages(
-            path,
-            document["extension"],
-            max_pdf_pages=self.settings.max_pdf_pages,
-            max_text_characters=self.settings.max_text_characters,
-            max_docx_uncompressed_mb=self.settings.max_docx_uncompressed_mb,
-        )
-        chunks = self.embedder.documents(pages)
+        started = perf_counter()
+        try:
+            pages = extract_pages(
+                path,
+                document["extension"],
+                max_pdf_pages=self.settings.max_pdf_pages,
+                max_text_characters=self.settings.max_text_characters,
+                max_docx_uncompressed_mb=self.settings.max_docx_uncompressed_mb,
+                measurements=measurements,
+            )
+        finally:
+            measurements["extraction_ms"] = round((perf_counter() - started) * 1000, 3)
+        chunks = self.embedder.documents(pages, measurements)
+        measurements.update(measure_chunks(chunks))
         for ordinal, chunk in enumerate(chunks):
             chunk.update(id=uuid4(), document_id=document["id"], ordinal=ordinal)
         return chunks

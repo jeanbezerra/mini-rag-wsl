@@ -1,0 +1,36 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { InfoLabel, MessageBar, MessageBarBody, ProgressBar, Spinner } from '@fluentui/react-components';
+import { formatDate, formatDuration, formatNumber, groupedHistogram, libraryApi, percent } from './library';
+import { DocumentActions, Empty, LibraryChart, LibraryError, Pager, Stat, Status, useRemote } from './LibraryShared';
+import { useLibraryStyles } from './libraryStyles';
+import { formatBytes } from './storage';
+
+const settingLabels: Record<string, string> = { chunk_tokens: 'Tokens por trecho', chunk_overlap: 'Sobreposição', embedding_batch_size: 'Lote de embeddings', embedding_model: 'Modelo de embeddings', cpu_threads: 'Threads da CPU', max_pdf_pages: 'Limite de páginas', max_chunks_per_document: 'Limite de trechos' };
+export default function LibraryDocumentDetail({ id, name, version, onChange, onRemoved }: { id: string; name: string; version: number; onChange: () => void; onRemoved: () => void }) {
+  const styles = useLibraryStyles();
+  const [page, setPage] = useState(1);
+  const title = useRef<HTMLHeadingElement>(null);
+  const loader = useCallback((signal: AbortSignal) => libraryApi.detail(id, page, signal), [id, page]);
+  const { data, error, loading } = useRemote(loader, version);
+  useEffect(() => { if (data) { const last = Math.max(1, Math.ceil(data.chunks.total / data.chunks.page_size)); if (page > last) setPage(last); } }, [data, page]);
+  useEffect(() => { title.current?.focus(); }, [id]);
+  const document = data?.document;
+  const bins = groupedHistogram(data?.indexing.histogram ?? []);
+  return <>
+    <div className={styles.sectionHeader}><div><h2 className={styles.heading} ref={title} tabIndex={-1}>{name}</h2>{document && <div className={styles.documentMeta}><span>{document.extension.toUpperCase().replace('.', '')}</span><span>{formatBytes(document.size_bytes)}</span><time dateTime={document.created_at}>{formatDate(document.created_at)}</time><Status value={document.status} /></div>}</div>{document && <DocumentActions document={document} allowReindex onChange={(removed) => { if (removed) onRemoved(); onChange(); }} />}</div>
+    <LibraryError message={error} />
+    {loading && !data && <Spinner label="Carregando documento" size="small" />}
+    {data && document && <>
+      {document.status === 'error' && <MessageBar intent="error"><MessageBarBody>{document.error || 'Não foi possível indexar este documento.'}</MessageBarBody></MessageBar>}
+      {(document.status === 'queued' || document.status === 'processing') && <section className={styles.card}><div className={styles.sectionHeader}><h3 className={styles.sectionTitle}>{document.status === 'queued' ? 'Aguardando processamento' : 'Indexação em andamento'}</h3><span className={styles.muted}>Atualize para acompanhar</span></div><ProgressBar aria-label="Indexação em andamento" /></section>}
+      <div className={styles.kpis}><Stat label="Trechos" value={formatNumber(document.chunk_count)} /><Stat label="Tokens · P50" value={formatNumber(data.indexing.tokens.p50)} hint="Mediana de tokens por entrada do modelo de embeddings, incluindo os tokens especiais de início e fim." /><Stat label="Processamento" value={formatDuration(data.ingestion?.duration_ms)} hint="Extração, tokenização e geração dos embeddings até a gravação dos vetores. Não inclui fila ou espera pela CPU." /><Stat label="Repetição exata" value={data.indexing.duplicate_ratio == null ? '—' : `${formatNumber(data.indexing.duplicate_ratio * 100, 1)}%`} hint="Trechos idênticos adicionais dentro deste documento. A repetição não determina sozinha a qualidade das respostas." /></div>
+      {document.status === 'ready' && data.indexing.tokens.measured_chunks === 0 && <MessageBar intent="info"><MessageBarBody>Este arquivo ainda não tem métricas. Reindexe para medi-lo.</MessageBarBody></MessageBar>}
+      {(data.indexing.tokens.measured_chunks > 0 || document.total_pages != null) && <div className={styles.split}>
+        {data.indexing.tokens.measured_chunks > 0 && <section className={styles.card}><div className={styles.sectionHeader}><h3 className={styles.sectionTitle}>Tamanho dos trechos</h3><span className={styles.muted}>tokens</span></div><LibraryChart spec={{ kind: 'bars', labels: bins.map((bin) => bin.label), values: bins.map((bin) => bin.count), name: 'Trechos' }} description={`Distribuição de tokens dos trechos de ${name}.`}><table className={styles.dataTable}><caption>Trechos por faixa de tokens</caption><thead><tr><th>Tokens</th><th>Trechos</th></tr></thead><tbody>{bins.map((bin) => <tr key={bin.label}><td>{bin.label}</td><td>{formatNumber(bin.count)}</td></tr>)}</tbody></table></LibraryChart></section>}
+        {document.total_pages != null && <section className={styles.card}><div className={styles.sectionHeader}><h3 className={styles.sectionTitle}>Páginas com texto</h3><InfoLabel infoButton={{ 'aria-label': 'Informações' }} info="Páginas em que o extrator encontrou texto incorporado. A ingestão não executa OCR.">Extração</InfoLabel></div><strong className={styles.kpiValue}>{document.text_pages != null ? percent(document.text_pages, document.total_pages) : '—'}</strong>{document.text_pages != null && document.total_pages > 0 && <ProgressBar value={document.text_pages / document.total_pages} aria-label={`${formatNumber(document.text_pages)} de ${formatNumber(document.total_pages)} páginas com texto`} />}<dl className={styles.detailsGrid}><div><dt>Com texto</dt><dd>{formatNumber(document.text_pages)}</dd></div><div><dt>Total</dt><dd>{formatNumber(document.total_pages)}</dd></div><div><dt>Caracteres</dt><dd>{formatNumber(document.extracted_characters)}</dd></div></dl></section>}
+      </div>}
+      {data.ingestion && <details className={styles.card}><summary>Detalhes da ingestão</summary><dl className={styles.detailsGrid}><div><dt>Extração</dt><dd>{formatDuration(data.ingestion.extraction_ms)}</dd></div><div><dt>Embeddings</dt><dd>{formatDuration(data.ingestion.embedding_ms)}</dd></div><div><dt>Concluída em</dt><dd>{formatDate(data.ingestion.finished_at)}</dd></div>{Object.entries(data.ingestion.settings).filter(([key]) => key in settingLabels).map(([key, value]) => <div key={key}><dt>{settingLabels[key]}</dt><dd>{typeof value === 'number' ? formatNumber(value) : value}</dd></div>)}</dl></details>}
+      <section className={styles.card}><div className={styles.sectionHeader}><h3 className={styles.sectionTitle}>Trechos indexados</h3>{loading && <Spinner size="tiny" aria-label="Atualizando trechos" />}</div>{data.chunks.items.length ? <><div aria-busy={loading}>{data.chunks.items.map((chunk) => <article key={chunk.id} className={styles.snippet}><div className={styles.snippetMeta}><strong>Trecho {formatNumber(chunk.ordinal + 1)}{chunk.page != null ? ` · página ${formatNumber(chunk.page)}` : ''}</strong><span>{chunk.token_count != null ? `${formatNumber(chunk.token_count)} tokens · ` : ''}{formatNumber(chunk.char_count)} caracteres</span></div><p>{chunk.content}</p></article>)}</div><Pager page={page} total={data.chunks.total} size={data.chunks.page_size} onChange={setPage} disabled={loading} label="trechos" /></> : <Empty>Sem trechos disponíveis para busca.</Empty>}</section>
+    </>}
+  </>;
+}

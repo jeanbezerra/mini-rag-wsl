@@ -1,4 +1,5 @@
 import math
+from time import perf_counter
 
 from fastembed import TextEmbedding
 from tokenizers import Tokenizer
@@ -40,7 +41,8 @@ class Embedder:
         self.status = "ready"
         self.error = None
 
-    def documents(self, pages: list[Page]) -> list[dict]:
+    def documents(self, pages: list[Page], measurements: dict | None = None) -> list[dict]:
+        started = perf_counter()
         chunks = token_chunks(
             pages,
             self.tokenizer,
@@ -48,12 +50,17 @@ class Embedder:
             overlap=self.settings.chunk_overlap,
             max_chunks=self.settings.max_chunks_per_document,
         )
+        if measurements is not None:
+            measurements["tokenization_ms"] = round((perf_counter() - started) * 1000, 3)
+        started = perf_counter()
         # MiniLM is symmetric: no query:/passage: prefixes. Batch small to bound CPU RAM.
         vectors = self.model.embed(
             [chunk["content"] for chunk in chunks], batch_size=self.settings.embedding_batch_size
         )
         for chunk, vector in zip(chunks, vectors, strict=True):
             chunk["embedding"] = vector_literal(vector)
+        if measurements is not None:
+            measurements["embedding_ms"] = round((perf_counter() - started) * 1000, 3)
         return chunks
 
     def query(self, text: str) -> str:

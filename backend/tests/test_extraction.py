@@ -32,6 +32,9 @@ def test_token_chunks_preserve_end_and_overlap(tokenizer):
     assert "palavra499" in chunks[-1]["content"]
     assert "palavra94" in chunks[0]["content"] and "palavra94" in chunks[1]["content"]
     assert all(len(tokenizer.encode(chunk["content"]).ids) <= 128 for chunk in chunks)
+    assert all(
+        chunk["token_count"] == len(tokenizer.encode(chunk["content"]).ids) for chunk in chunks
+    )
 
 
 def test_chunk_limit_is_enforced(tokenizer):
@@ -102,3 +105,28 @@ def test_configured_extraction_limits_and_chunk_overlap(tmp_path, tokenizer, mon
     chunks = token_chunks([Page(text)], tokenizer, size=40, overlap=5)
     assert "palavra35" in chunks[0]["content"] and "palavra35" in chunks[1]["content"]
     assert all(len(tokenizer.encode(chunk["content"]).ids) <= 42 for chunk in chunks)
+
+
+def test_pdf_measurements_distinguish_empty_pages_from_unknown_non_pdf(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    path = tmp_path / "document"
+    monkeypatch.setattr(
+        "rag.extraction.PdfReader",
+        lambda _: SimpleNamespace(
+            is_encrypted=False,
+            pages=[
+                SimpleNamespace(extract_text=lambda: "Página com texto."),
+                SimpleNamespace(extract_text=lambda: "   "),
+                SimpleNamespace(extract_text=lambda: None),
+            ],
+        ),
+    )
+    measurements = {}
+    pages = extract_pages(path, ".pdf", measurements=measurements)
+    assert [page.number for page in pages] == [1]
+    assert measurements == {"total_pages": 3, "text_pages": 1, "extracted_characters": 17}
+    path.write_text("Texto UTF-8", encoding="utf-8")
+    measurements = {}
+    extract_pages(path, ".txt", measurements=measurements)
+    assert measurements["total_pages"] is measurements["text_pages"] is None

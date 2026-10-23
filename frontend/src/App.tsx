@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge, Button, Dialog, DialogActions, DialogBody, DialogContent, DialogSurface, DialogTitle,
   DialogTrigger, Field, MessageBar, MessageBarBody, MessageBarTitle, Popover, PopoverSurface,
@@ -7,7 +7,7 @@ import {
 import {
   AddRegular, ArrowClockwiseRegular, ArrowUploadRegular, ChatRegular, CheckmarkCircleRegular,
   ChevronRightRegular, DatabaseRegular, DeleteRegular, DismissRegular, DocumentAddRegular,
-  DocumentSearchRegular, FolderOpenRegular, LeafOneRegular, LockClosedRegular, NavigationRegular,
+  DocumentSearchRegular, FolderOpenRegular, LeafOneRegular, LibraryRegular, LockClosedRegular, NavigationRegular,
   PersonRegular, SendRegular, ServerRegular, SettingsRegular, SparkleRegular, StopRegular,
 } from '@fluentui/react-icons';
 import Markdown from 'react-markdown';
@@ -17,6 +17,8 @@ import SettingsPage from './SettingsPage';
 import { loadConversations, newConversation, STORAGE_KEY } from './storage';
 import { useStyles } from './styles';
 import type { Conversation, Health, Message, RagDocument } from './types';
+
+const LibraryPage = lazy(() => import('./LibraryPage'));
 
 function available(status?: string) { return !!status && ['ready', 'ok', 'healthy', 'available', 'loaded'].includes(status); }
 
@@ -37,6 +39,7 @@ export default function App() {
   const [libraryOpen, setLibraryOpen] = useState(() => window.matchMedia('(min-width: 1001px)').matches);
   const [navigationOpen, setNavigationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [advancedLibraryOpen, setAdvancedLibraryOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [generating, setGenerating] = useState(false);
   const [chatStatus, setChatStatus] = useState('');
@@ -47,6 +50,8 @@ export default function App() {
   const fileRef = useRef<HTMLInputElement>(null);
   const libraryToggleRef = useRef<HTMLButtonElement>(null);
   const settingsToggleRef = useRef<HTMLButtonElement>(null);
+  const advancedLibraryToggleRef = useRef<HTMLButtonElement>(null);
+  const navigationToggleRef = useRef<HTMLButtonElement>(null);
   const libraryHeadingRef = useRef<HTMLHeadingElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -207,8 +212,9 @@ export default function App() {
   </aside>;
 
   const openSettings = () => { setNavigationOpen(false); setSettingsOpen(true); };
+  const openAdvancedLibrary = () => { setNavigationOpen(false); setAdvancedLibraryOpen(true); };
 
-  return <><div className={styles.app} style={settingsOpen ? { display: 'none' } : undefined}>
+  return <><div className={styles.app} style={settingsOpen || advancedLibraryOpen ? { display: 'none' } : undefined}>
     <a href="#main-chat" className={styles.skipLink}>Pular para a conversa</a>
     <nav className={mergeClasses(styles.sidebar, navigationOpen && styles.sidebarOpen)} aria-label="Conversas">
       <div className={styles.brand}><div className={styles.brandIcon}><DocumentSearchRegular aria-hidden /></div><div><div className={styles.brandName}>Mini RAG</div><span className={styles.small}>Seu conhecimento, por perto.</span></div></div>
@@ -227,13 +233,13 @@ export default function App() {
           </Dialog>
         </div>)}
       </div>
-      <Button icon={<SettingsRegular />} appearance="subtle" onClick={openSettings}>Configurações</Button>
+      <div className={styles.stack}><Button ref={advancedLibraryToggleRef} icon={<LibraryRegular />} appearance="subtle" onClick={openAdvancedLibrary}>Biblioteca avançada</Button><Button icon={<SettingsRegular />} appearance="subtle" onClick={openSettings}>Configurações</Button></div>
       <div className={styles.localCard}><LeafOneRegular aria-hidden /><div><p><strong>Pequeno por escolha.</strong></p><p className={styles.small}>Modelo aberto, execução em CPU e documentos no seu WSL.</p></div></div>
     </nav>
     <div className={styles.workspace}>
       <header className={styles.header}>
         <div className={styles.brand}>
-          <Button appearance="subtle" className={mergeClasses(styles.iconButton, styles.mobileMenu)} icon={<NavigationRegular />} aria-label="Mostrar conversas" aria-expanded={navigationOpen} onClick={() => setNavigationOpen(!navigationOpen)} />
+          <Button ref={navigationToggleRef} appearance="subtle" className={mergeClasses(styles.iconButton, styles.mobileMenu)} icon={<NavigationRegular />} aria-label="Mostrar conversas" aria-expanded={navigationOpen} onClick={() => setNavigationOpen(!navigationOpen)} />
           <div className={styles.headerTitle}><h1 className={styles.heading}>Converse com seus documentos</h1><span className={mergeClasses(styles.small, styles.desktopText)}>Respostas com contexto. Fontes para conferir.</span></div>
         </div>
         <div className={styles.headerActions}>
@@ -293,5 +299,5 @@ export default function App() {
         {libraryOpen && library}
       </div>
     </div>
-  </div>{settingsOpen && <SettingsPage onBack={() => { setSettingsOpen(false); requestAnimationFrame(() => settingsToggleRef.current?.focus()); }} onSaved={() => { void refreshHealth(); }} />}</>;
+  </div>{settingsOpen && <SettingsPage onBack={() => { setSettingsOpen(false); requestAnimationFrame(() => settingsToggleRef.current?.focus()); }} onSaved={() => { void refreshHealth(); }} />}{advancedLibraryOpen && <Suspense fallback={<Spinner label="Carregando biblioteca" />}><LibraryPage onBack={() => { setAdvancedLibraryOpen(false); requestAnimationFrame(() => { const trigger = advancedLibraryToggleRef.current; if (trigger?.getClientRects().length) trigger.focus(); else navigationToggleRef.current?.focus(); }); }} onDocumentsChanged={() => { void refreshDocuments(); }} /></Suspense>}</>;
 }

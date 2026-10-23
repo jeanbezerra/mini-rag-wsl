@@ -35,6 +35,7 @@ def extract_pages(
     max_pdf_pages: int | None = None,
     max_text_characters: int | None = None,
     max_docx_uncompressed_mb: int | None = None,
+    measurements: dict | None = None,
 ) -> list[Page]:
     pages: list[Page] = []
     total = 0
@@ -66,6 +67,8 @@ def extract_pages(
                 raise ExtractionError(
                     f"PDF excede {page_limit} páginas. Divida o documento ou ajuste o limite."
                 )
+            if measurements is not None:
+                measurements["total_pages"] = len(reader.pages)
             for index, page in enumerate(reader.pages, 1):
                 append(page.extract_text() or "", index)
         elif extension == ".docx":
@@ -107,6 +110,11 @@ def extract_pages(
         raise ExtractionError(
             "Nenhum texto encontrado. PDFs digitalizados precisam de OCR externo."
         )
+    if measurements is not None:
+        measurements["extracted_characters"] = total
+        measurements["text_pages"] = len(pages) if extension == ".pdf" else None
+        if extension != ".pdf":
+            measurements["total_pages"] = None
     return pages
 
 
@@ -131,10 +139,18 @@ def token_chunks(
             if content:
                 # Retokenization can alter boundary segmentation. Shrink conservatively
                 # instead of permitting hidden model truncation.
-                while len(tokenizer.encode(content, add_special_tokens=True).ids) > 128:
+                token_count = len(tokenizer.encode(content, add_special_tokens=True).ids)
+                while token_count > 128:
                     end -= 1
                     content = page.text[offsets[start][0] : offsets[end - 1][1]].strip()
-                chunks.append({"content": content, "page": page.number})
+                    token_count = len(tokenizer.encode(content, add_special_tokens=True).ids)
+                chunks.append(
+                    {
+                        "content": content,
+                        "page": page.number,
+                        "token_count": token_count,
+                    }
+                )
                 if len(chunks) > max_chunks:
                     raise ExtractionError("Documento gera fragmentos demais. Divida o arquivo.")
             if end >= len(offsets):

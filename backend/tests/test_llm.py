@@ -70,6 +70,45 @@ async def test_truncated_ollama_stream_is_error():
     await llm.close()
 
 
+@pytest.mark.parametrize(
+    "count,duration,expected",
+    [
+        (20, 2_000_000_000, 10),
+        (0, 1_000_000, 0),
+        (20, 0, None),
+        (20, None, None),
+        (None, 1_000_000, None),
+        (True, 100, None),
+        (20, -100, None),
+        (20, float("inf"), None),
+        (20, float("nan"), None),
+    ],
+)
+async def test_generation_speed_uses_only_valid_ollama_evaluation_measurements(
+    count, duration, expected
+):
+    llm = Ollama(Settings())
+    await llm.client.aclose()
+    payload = {
+        "done": True,
+        "eval_count": count,
+        "eval_duration": duration,
+        "total_duration": 100_000_000_000,
+    }
+    llm.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(200, text=json.dumps(payload) + "\n")
+        ),
+        base_url="http://ollama",
+    )
+    try:
+        events = [item async for item in llm.stream([])]
+        assert events[-1]["tokens_per_second"] == expected
+        assert events[-1]["duration_ms"] == 100_000
+    finally:
+        await llm.close()
+
+
 @pytest.mark.parametrize("context,output", [(4096, 512), (4600, 2048), (16384, 2048)])
 def test_configured_prompt_reserves_output_and_template_with_unicode(context, output):
     documents = [

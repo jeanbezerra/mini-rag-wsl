@@ -112,6 +112,22 @@ A configuração salva sobrevive ao reinício da aplicação e prevalece sobre o
 
 A seleção do modelo usa os modelos já baixados no Ollama local. Para disponibilizar outro modelo, baixe-o pelo terminal e atualize a lista na tela de configurações. O endpoint de configurações não dispara downloads.
 
+## Biblioteca avançada
+
+Abra **Biblioteca avançada**, acima de Configurações no menu de conversas. A área separa os dados em três contextos:
+
+| Página | Finalidade |
+| --- | --- |
+| Acervo | Pesquisar, filtrar e ordenar arquivos; consultar trechos, repetir falhas, reindexar e excluir |
+| Indexação | Examinar a distribuição de tokens, concentração dos trechos por arquivo, páginas com texto e repetição exata de fragmentos |
+| Desempenho | Acompanhar latência, busca, primeiro token, velocidade de geração e processamento dos documentos |
+
+Os gráficos usam Apache ECharts. Unidades, amostras e valores também podem ser consultados em texto; as definições ficam sob demanda. Os indicadores de indexação descrevem a estrutura do índice, sem atribuir uma nota de precisão ou de qualidade semântica às respostas.
+
+Metadados de tokenização, páginas e tempos são registrados nas novas ingestões. Arquivos anteriores à atualização continuam disponíveis e mostram ausência de medição nos campos não coletados. **Reindexar** aplica os ajustes atuais e gera esses metadados: o arquivo original é preservado e fica indisponível para busca até a conclusão do processamento. A ação exige confirmação na interface.
+
+O histórico de desempenho mantém até 500 operações de chat e 500 ingestões no PostgreSQL. Não armazena perguntas ou respostas nessa telemetria. A velocidade de geração depende das contagens e dos tempos informados pelo Ollama; sem esses dados, o indicador fica sem amostra. A ausência de medição não é apresentada como zero.
+
 ## Modelos e otimização de CPU
 
 | Componente | Padrão | Motivo |
@@ -170,7 +186,7 @@ flowchart LR
 
 **Não use `docker compose down -v` para parar a aplicação:** essa opção remove os volumes e seus dados. Preserve o `.env`; mudar apenas as senhas nele não altera roles de um banco já inicializado. Scripts em `database/init` executam somente no primeiro início de um volume vazio. Atualizações de schema usam o job `migrate`.
 
-As configurações globais também ficam no PostgreSQL e entram no backup do banco. Para atualizar uma instalação existente com esta versão, execute `docker compose up --build -d`; o job de migração cria a tabela de configurações antes da API iniciar, preservando documentos e vetores.
+As configurações globais e as medições da biblioteca também ficam no PostgreSQL e entram no backup do banco. Para atualizar uma instalação existente, execute `docker compose up --build -d`; o job de migração aplica o schema antes da API iniciar, preservando documentos e vetores. A migração de métricas não recalcula embeddings existentes.
 
 ## Segurança e limites de uso
 
@@ -238,3 +254,4 @@ Para um ensaio de recuperação, inicialize um **outro projeto Compose com volum
 - [FastEmbed e modelos suportados](https://qdrant.tech/documentation/embeddings/fastembed/) e [modelo multilíngue](https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2).
 - [API de chat Ollama](https://docs.ollama.com/api/chat) e [execução em CPU com Docker](https://docs.ollama.com/docker).
 - [PostgreSQL 18.6](https://www.postgresql.org/docs/release/18.6/), [layout da imagem oficial](https://hub.docker.com/_/postgres) e [pgvector](https://github.com/pgvector/pgvector).
+- [Apache ECharts](https://echarts.apache.org/handbook/en/get-started/) e [acessibilidade dos gráficos](https://echarts.apache.org/handbook/en/best-practices/aria/).

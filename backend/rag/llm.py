@@ -1,4 +1,5 @@
 import json
+import math
 
 import httpx
 
@@ -12,6 +13,15 @@ SYSTEM = (
 )
 PROMPT_BYTE_BUDGET = 3000
 TEMPLATE_TOKEN_RESERVE = 584
+
+
+def measured_number(value) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        return value if math.isfinite(value) and value >= 0 else None
+    except OverflowError:
+        return None
 
 
 def clip_bytes(text: str, budget: int) -> str:
@@ -186,11 +196,24 @@ class Ollama:
                 if content:
                     yield {"type": "token", "content": content}
                 if data.get("done"):
+                    tokens = measured_number(data.get("eval_count"))
+                    if not isinstance(tokens, int) or tokens > 2_147_483_647:
+                        tokens = None
+                    evaluation_ns = measured_number(data.get("eval_duration"))
+                    total_ns = measured_number(data.get("total_duration"))
+                    speed = (
+                        measured_number(tokens * 1_000_000_000 / evaluation_ns)
+                        if tokens is not None and evaluation_ns
+                        else None
+                    )
                     yield {
                         "type": "done",
                         "model": settings.ollama_model,
-                        "tokens": data.get("eval_count"),
-                        "duration_ms": round(data.get("total_duration", 0) / 1_000_000),
+                        "tokens": tokens,
+                        "duration_ms": round(total_ns / 1_000_000, 3)
+                        if total_ns is not None
+                        else None,
+                        "tokens_per_second": round(speed, 3) if speed is not None else None,
                         "reason": data.get("done_reason", "stop"),
                     }
                     return

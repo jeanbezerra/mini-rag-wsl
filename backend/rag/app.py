@@ -6,11 +6,13 @@ import os
 import unicodedata
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
+import anyio
 import httpx
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from psycopg.errors import UniqueViolation
@@ -191,6 +193,44 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
     async def documents():
         return {"documents": await state.db.list_documents()}
 
+    @app.get("/api/library/summary")
+    async def library_summary():
+        return await state.db.library_summary()
+
+    @app.get("/api/library/documents")
+    async def library_documents(
+        q: Annotated[str, Query(max_length=200)] = "",
+        status: Literal["queued", "processing", "ready", "error"] | None = None,
+        sort: Literal["newest", "name", "size", "chunks"] = "newest",
+        page: Annotated[int, Query(ge=1, le=10000)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    ):
+        return await state.db.library_documents(q.strip(), status, sort, page, page_size)
+
+    @app.get("/api/library/documents/{document_id}")
+    async def library_document(
+        document_id: UUID,
+        page: Annotated[int, Query(ge=1, le=10000)] = 1,
+        page_size: Annotated[int, Query(ge=1, le=50)] = 12,
+    ):
+        result = await state.db.library_document(document_id, page, page_size)
+        if result is None:
+            raise HTTPException(404, "Documento não encontrado.")
+        return result
+
+    @app.post("/api/library/documents/{document_id}/reindex", status_code=202)
+    async def reindex_document(document_id: UUID):
+        if not (state.settings.uploads_dir / str(document_id)).is_file():
+            raise HTTPException(404, "Arquivo original não encontrado.")
+        document = await state.db.reindex_document(document_id)
+        if document is None:
+            raise HTTPException(409, "Somente documentos indexados podem ser reindexados.")
+        return document
+
+    @app.get("/api/library/performance")
+    async def library_performance(model: Annotated[str | None, Query(max_length=200)] = None):
+        return await state.db.library_performance(model)
+
     @app.post("/api/documents", status_code=201)
     async def upload(request: Request, file: Annotated[UploadFile, File()]):
         active = request.state.upload_settings
@@ -261,14 +301,37 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
             )
 
         async def stream():
+            started = perf_counter()
+            active = state.settings
+            measurements = {
+                "id": uuid4(),
+                "model": active.ollama_model,
+                "outcome": "cancelled",
+                "wait_ms": None,
+                "search_ms": None,
+                "embedding_ms": None,
+                "first_token_ms": None,
+                "output_tokens": None,
+                "tokens_per_second": None,
+                "source_count": 0,
+                "settings": active.public().model_dump(),
+            }
             try:
                 # Cancellation of the response closes Ollama's HTTP stream and frees the lock.
                 async with state.inference_lock:
                     active = state.settings
+                    measurements["model"] = active.ollama_model
+                    measurements["settings"] = active.public().model_dump()
+                    measurements["wait_ms"] = round((perf_counter() - started) * 1000, 3)
+                    search_started = perf_counter()
                     embedding = await native_call(state.embedder.query, body.message)
+                    measurements["embedding_ms"] = round(
+                        (perf_counter() - search_started) * 1000, 3
+                    )
                     sources = await state.db.search(
                         body.message, embedding, body.document_ids, active.retrieval_top_k
                     )
+                    measurements["search_ms"] = round((perf_counter() - search_started) * 1000, 3)
                     messages, sources = build_prompt(
                         body.message,
                         [item.model_dump() for item in body.history],
@@ -276,8 +339,10 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
                         context_tokens=active.context_tokens,
                         max_output_tokens=active.max_output_tokens,
                     )
+                    measurements["source_count"] = len(sources)
                     yield event({"type": "sources", "sources": sources})
                     if not sources:
+                        measurements["outcome"] = "no_sources"
                         yield event(
                             {
                                 "type": "token",
@@ -294,10 +359,19 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
                         async for chunk in state.llm.stream(messages):
                             if await request.is_disconnected():
                                 return
+                            if chunk["type"] == "token" and measurements["first_token_ms"] is None:
+                                measurements["first_token_ms"] = round(
+                                    (perf_counter() - started) * 1000, 3
+                                )
+                            if chunk["type"] == "done":
+                                measurements["outcome"] = "completed"
+                                measurements["output_tokens"] = chunk.get("tokens")
+                                measurements["tokens_per_second"] = chunk.get("tokens_per_second")
                             yield event(chunk)
             except asyncio.CancelledError:
                 raise
             except Exception:
+                measurements["outcome"] = "error"
                 logger.exception("Chat generation failed")
                 yield event(
                     {
@@ -308,6 +382,18 @@ def create_app(settings: Settings | None = None, runtime=None) -> FastAPI:
                         ),
                     }
                 )
+            finally:
+                measurements["duration_ms"] = round((perf_counter() - started) * 1000, 3)
+                record = getattr(state.db, "record_chat_metrics", None)
+                if record is not None:
+                    # A disconnected browser still leaves a bounded measurement. A
+                    # telemetry failure must never corrupt NDJSON or keep CPU locked.
+                    with anyio.CancelScope(shield=True):
+                        try:
+                            async with asyncio.timeout(2):
+                                await record(measurements)
+                        except Exception:
+                            logger.warning("Chat measurements could not be persisted")
 
         return StreamingResponse(
             stream(),

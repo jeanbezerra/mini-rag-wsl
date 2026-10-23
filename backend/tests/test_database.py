@@ -7,6 +7,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 
+from rag.analytics import measure_chunks
 from rag.config import Settings
 from rag.db import Database
 from rag.embedding import vector_literal
@@ -165,4 +166,163 @@ async def test_runtime_settings_cas_restart_and_minimal_permissions(tmp_path):
         await db.open()
         current = await db.load_runtime_settings()
         await db.save_runtime_settings(current["revision"], original["values"])
+        await db.close()
+
+
+async def test_library_legacy_detail_pagination_and_atomic_reindex_races():
+    db = Database(Settings(database_url=APP_URL))
+    await db.open()
+    first, second = uuid4(), uuid4()
+    prefix = "library-" + uuid4().hex
+    value = vector_literal([1.0] + [0.0] * 383)
+
+    def chunk(identifier, ordinal=0, token_count=None):
+        return {
+            "id": uuid4(),
+            "document_id": identifier,
+            "ordinal": ordinal,
+            "content": "Conteúdo vetorial de teste",
+            "page": ordinal + 1,
+            "embedding": value,
+            "token_count": token_count,
+        }
+
+    try:
+        for identifier, suffix in ((first, " A_100%"), (second, " B")):
+            await db.add_document(
+                {
+                    "id": identifier,
+                    "name": prefix + suffix,
+                    "extension": ".pdf",
+                    "sha256": identifier.hex * 2,
+                    "size_bytes": 100,
+                }
+            )
+            assert (await db.claim())["id"] == identifier
+            chunks = (
+                [chunk(identifier)]
+                if identifier == first
+                else [chunk(identifier, i, 17) for i in range(2)]
+            )
+            metadata = None
+            if identifier == second:
+                metadata = {
+                    **measure_chunks(chunks),
+                    "total_pages": 3,
+                    "text_pages": 2,
+                    "extracted_characters": 100,
+                    "duration_ms": 50,
+                    "extraction_ms": 10,
+                    "embedding_ms": 30,
+                    "finished_at": "2026-10-22T12:00:00+00:00",
+                    "settings": {"chunk_tokens": 110, "cpu_threads": 4},
+                }
+            await db.finish(identifier, chunks, metadata)
+        literal = await db.library_documents("A_100%", "ready", "name", 1, 20)
+        assert literal["total"] == 1 and literal["documents"][0]["id"] == first
+        paged = await db.library_documents(prefix, "ready", "name", 2, 1)
+        assert paged["total"] == 2 and paged["documents"][0]["id"] == second
+        legacy = await db.library_document(first, 1, 5)
+        assert legacy["ingestion"] is None
+        assert legacy["chunks"]["items"][0]["token_count"] is None
+        measured = await db.library_document(second, 2, 1)
+        assert measured["indexing"]["tokens"]["measured_chunks"] == 2
+        assert measured["indexing"]["duplicate_ratio"] == 0.5
+        assert measured["chunks"]["items"][0]["ordinal"] == 1
+        assert measured["document"]["total_pages"] == 3
+        assert measured["ingestion"]["settings"]["chunk_tokens"] == 110
+        summary = await db.library_summary()
+        assert summary["indexing"]["legacy_documents"] >= 1
+        assert summary["indexing"]["tokens"]["measured_chunks"] >= 2
+        # Concurrent confirmations enqueue the file once, atomically clearing all
+        # vectors and obsolete measurements while preserving its document identity.
+        attempts = await asyncio.gather(db.reindex_document(second), db.reindex_document(second))
+        assert sum(item is not None for item in attempts) == 1
+        pending = await db.library_document(second, 1, 5)
+        assert pending["document"]["status"] == "queued"
+        assert pending["document"]["chunk_count"] == pending["chunks"]["total"] == 0
+        assert pending["ingestion"] is None
+        assert (await db.claim())["id"] == second
+        assert await db.reindex_document(second) is None
+        await db.fail_document(second, "Nova ingestão falhou")
+        assert await db.search("vetorial", value, [second], 6) == []
+        assert await db.reindex_document(second) is None
+        await db.retry_document(second)
+        assert (await db.claim())["id"] == second
+        await db.finish(second, [chunk(second)])
+        # Delete and reindex acquire the same parent-row lock first. Either order
+        # leaves no orphan vectors and cannot revive a deleted file.
+        await asyncio.gather(db.reindex_document(second), db.delete_document(second))
+        assert await db.library_document(second, 1, 5) is None
+    finally:
+        await db.delete_document(first)
+        await db.delete_document(second)
+        await db.close()
+
+
+async def test_metrics_retention_is_global_and_runtime_cannot_update_measurements():
+    db = Database(Settings(database_url=APP_URL))
+    await db.open()
+    marker = "metrics-test-" + uuid4().hex
+    try:
+        async with db.pool.connection() as conn:
+            # Seed a bounded disposable workload without 1,000 network round trips.
+            await conn.execute(
+                "INSERT INTO rag.chat_metrics (id,model,outcome,duration_ms,search_ms,settings) "
+                "SELECT uuidv7(),%s,'completed',n,n / 2.0,'{}'::jsonb "
+                "FROM generate_series(1,502) AS n",
+                (marker,),
+            )
+            await conn.execute(
+                "INSERT INTO rag.ingestion_metrics (id,document_name,outcome,duration_ms,settings) "
+                "SELECT uuidv7(),%s,'error',n,'{}'::jsonb FROM generate_series(1,502) AS n",
+                (marker,),
+            )
+        await db.record_chat_metrics(
+            {
+                "id": uuid4(),
+                "model": marker,
+                "outcome": "completed",
+                "duration_ms": 40,
+                "wait_ms": 1,
+                "search_ms": 2,
+                "embedding_ms": 1,
+                "first_token_ms": 10,
+                "output_tokens": 10,
+                "tokens_per_second": 5,
+                "source_count": 1,
+                "settings": {},
+            }
+        )
+        await db.record_ingestion_metrics(
+            {
+                "id": uuid4(),
+                "document_id": None,
+                "document_name": marker,
+                "outcome": "error",
+                "duration_ms": 50,
+                "extraction_ms": None,
+                "embedding_ms": None,
+                "chunks": None,
+                "chunks_per_second": None,
+                "settings": {},
+            }
+        )
+        summary = await db.library_performance(marker)
+        assert summary["chat"]["samples"] == len(summary["recent_chat"]) == 500
+        assert summary["ingestion"]["samples"] == len(summary["recent_ingestion"]) == 500
+        assert summary["chat"]["tokens_per_second"] == {"p50": 5, "p95": 5}
+        assert summary["ingestion"]["duration_ms"] == {"p50": None, "p95": None}
+        assert (await db.library_performance("unknown"))["chat"]["samples"] == 0
+        async with db.pool.connection() as conn:
+            for table in ("chat_metrics", "ingestion_metrics"):
+                with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                    async with conn.transaction():
+                        await conn.execute(f"UPDATE rag.{table} SET duration_ms=1")
+    finally:
+        async with db.pool.connection() as conn:
+            await conn.execute("DELETE FROM rag.chat_metrics WHERE model=%s", (marker,))
+            await conn.execute(
+                "DELETE FROM rag.ingestion_metrics WHERE document_name=%s", (marker,)
+            )
         await db.close()
